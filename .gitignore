@@ -1,0 +1,30 @@
+# 数据产物一律不提交（解密出的聊天明文属高度敏感数据）
+out/
+tmpdec/
+dingtalk_out/
+*.jsonl
+
+# 原始抓取数据（含真实会话内容 / conversationId）
+*.json
+!package.json
+!package-lock.json
+
+# 中间产物
+*.log
+dm_cipher/
+dm/
+slices/
+slices2/
+aisearch/
+skill_test/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
