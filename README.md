@@ -6,6 +6,88 @@
 
 ---
 
+## 如何获取访问权限
+
+本仓库是**私有**的，需要仓库 owner 把你加为 collaborator 才能访问。
+
+1. 把你的 GitHub 用户名告诉 owner
+2. owner 在 GitHub 网页操作：仓库页 → `Settings` → `Collaborators` → `Add people`，搜索你的用户名并邀请（权限选 `Read` 即可）
+3. 你在邮箱里接受邀请
+4. 接受后就能 clone 了：
+
+```bash
+git clone https://github.com/hzqedison/dingtalk-message-decrypt.git
+cd dingtalk-message-decrypt
+```
+
+> 只想看内容不想 clone？直接打开仓库网页就行，授权后网页、Raw 文件、Release 都能访问。
+
+---
+
+## 安装 dws CLI
+
+本技能依赖钉钉官方的 `dws` 命令行工具，**必须先装好并登录**，否则后面所有命令都跑不了。
+
+`dws` 是钉钉官方开源项目：[DingTalk-Real-AI/dingtalk-workspace-cli](https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli)（Apache-2.0）。
+
+### 1. 安装
+
+选一种就行：
+
+```bash
+# Windows（PowerShell）
+irm https://raw.githubusercontent.com/DingTalk-Real-AI/dingtalk-workspace-cli/main/scripts/install.ps1 | iex
+
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/DingTalk-Real-AI/dingtalk-workspace-cli/main/scripts/install.sh | sh
+
+# 有 Node.js 的话（npm）
+npm install -g dingtalk-workspace-cli
+
+# macOS 用户也可以走 Homebrew
+brew tap DingTalk-Real-AI/dingtalk-workspace-cli https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli.git
+brew install dingtalk-workspace-cli
+```
+
+**国内网络**（GitHub 访问不稳时走 Gitee 镜像）：
+
+```bash
+DWS_GITEE_REPO=DingTalk-Real-AI/dingtalk-workspace-cli \
+  curl -fsSL https://gitee.com/DingTalk-Real-AI/dingtalk-workspace-cli/raw/main/scripts/install.sh | sh
+
+# npm 走国内镜像
+npm install -g dingtalk-workspace-cli --registry=https://registry.npmmirror.com
+```
+
+> 也可以直接把仓库地址甩给 AI 助手，让它帮你装：「帮我安装钉钉 DWS：https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli」
+
+### 2. 登录授权
+
+```bash
+dws auth login          # 自动打开浏览器，选择企业组织并授权
+dws auth login --device # 无图形界面环境（Docker / SSH / CI）用这个
+```
+
+如果提示企业未开通 CLI 访问：选择组织后页面会有 **Apply Now**，点了会通知企业管理员，管理员批准后再跑一次 `dws auth login` 即可。
+
+管理员开通入口：钉钉开放平台 → **CLI Access Management** → 启用。
+
+### 3. 升级到 v1.0.63 或更高（硬性要求）
+
+```bash
+dws version     # 必须 >= v1.0.63
+dws upgrade     # 低于这个版本必须升级
+```
+
+**升级是解锁解密能力的必要条件。** 在 v1.0.62 上：
+
+- `crypto decrypt --layer safechat|full` → 直接崩溃（safechat 本地层的 cgo stack overflow）
+- `crypto decrypt --layer ding` → 返回 `not_encrypted`
+
+升级到 v1.0.63 后 `--layer full` 正常工作。如果你卡在「解不开」，先查版本。
+
+---
+
 ## 为什么需要它
 
 企业开启钉钉「三方加密」后，用 dws CLI 拉取消息会大量看到占位符：
@@ -25,22 +107,6 @@
 | 群聊里「被引用原文」100% 加密 | 引用内容作为消息体（密文）返回 |
 | 机器人推送、日程卡片、图片 mediaId、审批 100% 可读 | 走服务端结构化通道，不进聊天正文加密 |
 | 越近期的消息加密率越高 | 安全策略在灰度放量 |
-
----
-
-## 前置条件（硬性）
-
-```bash
-dws version     # 必须 >= v1.0.63
-dws upgrade     # v1.0.62 的 safechat 本地层会 cgo 崩溃（stack overflow）
-```
-
-**升级是解锁解密能力的必要条件。** 在 v1.0.62 上：
-
-- `crypto decrypt --layer safechat|full` → 直接崩溃
-- `crypto decrypt --layer ding` → 返回 `not_encrypted`
-
-升级到 v1.0.63 后 `--layer full` 正常工作。如果你卡在「解不开」，先查版本。
 
 ---
 
@@ -92,9 +158,11 @@ python scripts/dws_decrypt.py --resume --out ./out                  # 断点续�
 
 ## 安装为 AI 技能
 
-复制整个目录到你的 AI 工具技能目录即可被自动发现：
+clone 下来后，把整个目录复制到你的 AI 工具技能目录即可被自动发现：
 
 ```bash
+cd dingtalk-message-decrypt
+
 # Claude Code
 cp -r . ~/.claude/skills/dingtalk-message-decrypt
 
@@ -112,6 +180,24 @@ cp -r . ~/.workbuddy/skills/dingtalk-message-decrypt
 ```markdown
 - 处理钉钉消息（拉取/整理待办/周报/纪要）时，先加载 skill `dingtalk-message-decrypt`；
   遇到 `[加密消息，无法解码]` 不要跳过，按 SKILL.md 的解密流程处理。
+```
+
+---
+
+## 脚本目录
+
+| 路径 | 说明 |
+|---|---|
+| `scripts/dws_decrypt.py` | **主脚本**。拉列表 → 拉密文 → 逐条解密 → 合并，一条命令跑完，支持断点续跑。只依赖 Python 标准库 |
+| `scripts/legacy/fetch_dm_cipher.py` | 【历史】只负责并行拉取带密文的单聊消息，是主脚本的前身 |
+| `scripts/legacy/merge_dm.py` | 【历史】合并明文与解密结果、按关键词粗筛待办信号，演示了信号筛选思路 |
+
+`legacy/` 里的脚本保持原样归档，用于追溯当时的踩坑过程，功能已被 `dws_decrypt.py` 完全覆盖，**日常请用主脚本**。
+
+两个 legacy 脚本需要你通过环境变量告诉它你是谁（用来过滤掉自己发出的消息）：
+
+```bash
+export DWS_ME="你的钉钉昵称"
 ```
 
 ---
