@@ -63,12 +63,16 @@ dws chat crypto decrypt --file <密文文件> --layer full --format json
 ### 3. 批量
 
 不支持批量输入（多行/JSON 数组都无效），必须逐条调用。
-用 `scripts/dws_decrypt.py` 一键完成「拉列表 → 拉密文 → 解密 → 合并」：
+用技能自带的 `dws_decrypt.py` 一键完成「拉列表 → 拉密文 → 解密 → 合并」：
 
 ```bash
-python scripts/dws_decrypt.py --days 92 --out ./out --workers 16
-python scripts/dws_decrypt.py --days 92 --out ./out --limit 200   # 先试跑 200 条
+# ~/.claude 可换成 ~/.codex 或 ~/.workbuddy —— 三者是同一份文件的链接
+python ~/.claude/skills/dingtalk-message-decrypt/scripts/dws_decrypt.py --days 92 --out ./out --workers 16
+python ~/.claude/skills/dingtalk-message-decrypt/scripts/dws_decrypt.py --days 92 --out ./out --limit 200   # 先试跑 200 条
 ```
+
+**务必用绝对路径**：技能是通过符号链接加载的，agent 的工作目录不固定，
+写相对路径 `scripts/dws_decrypt.py` 会找不到脚本。
 
 ## 性能与坑
 

@@ -1,0 +1,4 @@
+# Shell 脚本必须保持 LF 换行。
+# CRLF 在 macOS/Linux 的 bash 下会报 `\r: command not found`，
+# 即使 Windows 上 core.autocrlf=true，也强制 .sh 用 LF。
+*.sh text eol=lf

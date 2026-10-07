@@ -165,29 +165,99 @@ python scripts/dws_decrypt.py --resume --out ./out                  # 断点续�
 
 ## 安装为 AI 技能
 
-clone 下来后，把整个目录复制到你的 AI 工具技能目录即可被自动发现：
+推荐用「**单一主源 + 符号链接**」：文件只存一份，Claude Code / Codex / WorkBuddy 三处用链接指向它。
+以后升级只改主源，三处自动跟随——**避免三份拷贝各自版本漂移**。
+
+```
+主源  ~/.agents/skills/dingtalk-message-decrypt/   ← 唯一真实文件
+        ├── ~/.claude/skills/dingtalk-message-decrypt   （链接）
+        ├── ~/.codex/skills/dingtalk-message-decrypt    （链接）
+        └── ~/.workbuddy/skills/dingtalk-message-decrypt（链接）
+```
+
+### 一键安装（推荐）
+
+```bash
+git clone https://github.com/hzqedison/dingtalk-message-decrypt.git
+cd dingtalk-message-decrypt
+bash install.sh
+```
+
+脚本做三件事：① 建主源并复制文件；② 在三处技能目录建链接；③ 验证三处都能读到 `SKILL.md`。
+
+换主源位置（比如不想用 `~/.agents`）：
+
+```bash
+SKILL_SOURCE=~/.claude/skills bash install.sh
+```
+
+#### Windows 的链接权限
+
+`install.sh` 优先建真符号链接（`mklink /D`），这需要**开发者模式**或**管理员权限**；
+不满足时自动降级为目录联接（`mklink /J`），仍不行再降级为三份实体拷贝。
+三种方式**功能完全一样**，只是实体拷贝以后升级要重跑一次 `install.sh`。
+
+macOS / Linux 直接 `ln -s`，无此限制。
+
+### 以后怎么升级
 
 ```bash
 cd dingtalk-message-decrypt
+git pull
+bash sync_to_agents.sh
+```
 
-# Claude Code
-cp -r . ~/.claude/skills/dingtalk-message-decrypt
+`sync_to_agents.sh` 会把新文件同步到主源并做 MD5 校验（Windows / macOS / Linux 通用）。
+三处是链接的话会自动跟随；若当时降级成了拷贝，它会提示你重跑 `install.sh`。
 
-# Codex
-cp -r . ~/.codex/skills/dingtalk-message-decrypt
+### 验证装好了没
 
-# WorkBuddy
-cp -r . ~/.workbuddy/skills/dingtalk-message-decrypt
+```bash
+bash sync_to_agents.sh   # 看「三处技能目录状态」，三处都 ✓ 即正常
+```
+
+或直接确认三处都能读到同一份文件：
+
+```bash
+ls -l ~/.claude/skills/dingtalk-message-decrypt ~/.codex/skills/dingtalk-message-decrypt ~/.workbuddy/skills/dingtalk-message-decrypt
 ```
 
 装好后直接对 AI 说「帮我整理最近一个月的钉钉待办」，它会自动加载 `SKILL.md` 并按正确流程走。
 
-对 Codex，可在 `~/.codex/AGENTS.md` 里加一行全局指引：
+### 手工安装（不想跑脚本时）
+
+把整个目录放到主源，再手动建链接：
+
+```bash
+# 主源
+mkdir -p ~/.agents/skills
+cp -r . ~/.agents/skills/dingtalk-message-decrypt
+
+# 三处链接（macOS / Linux）
+for d in .claude .codex .workbuddy; do
+  mkdir -p ~/$d/skills
+  ln -sfn ~/.agents/skills/dingtalk-message-decrypt ~/$d/skills/dingtalk-message-decrypt
+done
+```
+
+Windows（Git Bash，需开发者模式或管理员）：
+
+```bash
+for d in .claude .codex .workbuddy; do
+  cmd //c "mklink /D $(cygpath -w ~/$d/skills/dingtalk-message-decrypt) $(cygpath -w ~/.agents/skills/dingtalk-message-decrypt)"
+done
+```
+
+### Codex 额外一步（可选）
+
+Codex 建议在 `~/.codex/AGENTS.md` 里加全局指引，让它遇到加密消息时主动加载技能：
 
 ```markdown
 - 处理钉钉消息（拉取/整理待办/周报/纪要）时，先加载 skill `dingtalk-message-decrypt`；
   遇到 `[加密消息，无法解码]` 不要跳过，按 SKILL.md 的解密流程处理。
 ```
+
+Claude Code 与 WorkBuddy **无需任何注册**——放进技能目录后靠 `SKILL.md` 的 frontmatter 自动发现。
 
 ---
 
@@ -195,6 +265,8 @@ cp -r . ~/.workbuddy/skills/dingtalk-message-decrypt
 
 | 路径 | 说明 |
 |---|---|
+| `install.sh` | **一键部署**：建主源 + 三处符号链接 + 验证。Windows / macOS / Linux 通用，无建链权限时自动降级为拷贝 |
+| `sync_to_agents.sh` | **升级用**：把仓库文件同步到主源并 MD5 校验，同时报告三处技能目录状态 |
 | `scripts/dws_decrypt.py` | **主脚本**。拉列表 → 拉密文 → 逐条解密 → 合并，一条命令跑完，支持断点续跑。只依赖 Python 标准库 |
 | `scripts/legacy/fetch_dm_cipher.py` | 【历史】只负责并行拉取带密文的单聊消息，是主脚本的前身 |
 | `scripts/legacy/merge_dm.py` | 【历史·下游分析】把已解密的单聊语料按关键词粗筛成「疑似待办」分片；**只筛不加，不增加可读消息数** |
