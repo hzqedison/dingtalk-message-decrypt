@@ -1,8 +1,9 @@
 # dingtalk-message-decrypt
 
-让 AI 助手（Claude Code / Codex / WorkBuddy 等）能完整读取并**解密**钉钉聊天记录——包括企业开启「三方加密」后那些显示为 `[加密消息，无法解码]` 的单聊消息。
+让 AI 助手（Claude Code / Codex / WorkBuddy 等）能完整读取并**解密**钉钉聊天记录——包括企业开启「三方加密」后那些显示为 `[加密消息，无法解码]` 的单聊与群聊消息。
 
-实测（某企业近 92 天单聊样本）：25,848 条密文，成功解密 25,830 条，**成功率 99.93%**（失败 18 条均为 `no_plaintext`，即空消息/已撤回）。
+**最新实测（2026-10-09，某企业近 92 天全量，单聊 + 群聊）**：172,819 条消息中 39,351 条为密文，**全部还原，还原率 100.0000%**。
+（更早的一轮仅覆盖单聊样本：25,848 条密文解出 25,830 条，99.93%；剩余 18 条 `no_plaintext` 在后续用 `--layer full` 重试后全部解出。）
 
 ---
 
@@ -103,15 +104,15 @@ dws upgrade     # 低于这个版本必须升级
 
 | 现象 | 原因 |
 |---|---|
-| 群聊正文 100% 可读，单聊 70~80% 加密 | 三方加密主要覆盖点对点正文；群聊服务端要支持 @/搜索/机器人，留明文 |
-| 群聊里「被引用原文」100% 加密 | 引用内容作为消息体（密文）返回 |
+| **单聊和群聊的正文都会加密** | 三方加密覆盖点对点正文，**也覆盖群聊正文**。旧结论「群聊正文 100% 明文」来自单日样本，已被 3 个月全量实测推翻：18,692 条群聊正文是密文 |
+| 「被引用原文」100% 加密 | 引用内容作为消息体（密文）返回，字段在 `quotedMessage.content` |
 | 机器人推送、日程卡片、图片 mediaId、审批 100% 可读 | 走服务端结构化通道，不进聊天正文加密 |
 | 越近期的消息加密率越高 | 安全策略在灰度放量 |
 
 ### 可读消息怎么算（统计口径）
 
 - **可读消息 = 原始明文（本来就能读的）+ 解密成功的明文**，只有这两部分进入统计。
-- 上表的「单聊 70~80% 加密」是**解密前**的原始分布；**解密后**可读率取决于解密成功率（本仓库实测 99.93%），两者不矛盾。
+- 上表的加密率是**解密前**的原始分布；**解密后**可读率取决于解密成功率（本仓库实测 **100%**，见下节），两者不矛盾。
 - 「content / 原文」专指形如 `xxxx...||2||1||228` 的**密文**；解密后的可读内容一律称**明文**。
 - **关键词筛选只做下游分析**：`scripts/legacy/merge_dm.py` 只是从「已可读消息」里挑「疑似待办」候选，**只会减少、不会增加能读到的消息**。所有对外数字一律按「原始拉取 + 实际解密结果」统计，不受关键词筛选影响。
 
@@ -123,40 +124,53 @@ dws upgrade     # 低于这个版本必须升级
 
 ```bash
 # 1. 拿密文（必须用底层命令，它会返回 content 字段）
+#    --time 给的是【下界】，--direction newer 往上翻 → 天然落在时间窗内
+#    不要传 --max-items：任何非零值都会截断（600 曾让 10 个会话缺一个半月）
 dws chat message list --conversation-id <cid> \
-  --time "2026-10-07 00:00:00" --direction older \
-  --page-all --page-limit 200 --max-items 600 --format json
+  --time "2026-07-07 00:00:00" --direction newer \
+  --limit 100 --format json --timeout 45
 # content 形如：xxxx...||2||1||228
+# 翻页游标取 nextPage['time']（nextPage 是 dict，别把整个 dict 当 --time 传）
 
-# 2. 逐条解密
-dws chat crypto decrypt --file <密文文件> --layer full --format json
-# 成功返回：{"keyVersion":1,"layer":"full","ok":true,"plaintext":"..."}
+# 2. 逐条解密（--file 必须是相对路径！传绝对路径会被 dws 拒绝）
+cd /path/to/tmpdec
+dws chat crypto decrypt --file in_1.txt --layer safechat --format json
+# 成功返回：{"ok":true,"layer":"safechat","plaintext":"..."}
 ```
 
-`--layer` 三档的区别：
+`--layer` 三档的区别（v1.0.63 实测）：
 
-- `full` = SafeChat 本地层 + Ding 服务端层 —— **必须用这个**
-- `safechat` = 只解本地层，输出仍是中间密文
-- `ding` = 单独用会报 `not_encrypted`
+- `safechat` = 纯本地解密。**最快（6.61 QPS）且 100% 成功 —— 用作主层**
+- `full` = SafeChat 本地 + Ding 服务端兜底。4.16 QPS，**慢 59%**，只作降级
+- `ding` = 单独调服务端批量解密接口，**实测 30/30 全失败，不要用**
+
+> **最高频的坑**：`--file` 传绝对路径会报
+> `--file must be a relative path within the current directory`，表现为整批 0 成功。
+> 正确做法是 `cd` 到临时目录、只传文件名（脚本里用 `subprocess.run(..., cwd=tmp_dir)`）。
 
 ### 一键脚本
 
 不支持批量输入（多行、JSON 数组都无效），必须逐条调用。用脚本自动化：
 
 ```bash
-python scripts/dws_decrypt.py --days 92 --out ./out                 # 近 92 天全部单聊
-python scripts/dws_decrypt.py --days 92 --out ./out --limit 200     # 先试跑 200 条
-python scripts/dws_decrypt.py --days 92 --out ./out --workers 16    # 指定并发
-python scripts/dws_decrypt.py --resume --out ./out                  # 断点续跑
+python scripts/dws_decrypt.py --days 92 --out ./out --kind all       # 近 92 天，单聊 + 群聊（推荐）
+python scripts/dws_decrypt.py --days 92 --out ./out                  # 只跑单聊
+python scripts/dws_decrypt.py --days 92 --out ./out --limit 200      # 先试跑 200 条
+python scripts/dws_decrypt.py --days 92 --out ./out --workers 16     # 指定解密并发
+python scripts/dws_decrypt.py --out ./out                            # 重跑即续跑（页级 + 条级断点）
 ```
+
+脚本已内置：会话清单续 `--cursor`、手动分页拉取、**密文字符串去重**（同一条被多处引用只解一次）、
+「被引用原文」优先按 `openMessageId` 查表、`--layer safechat` 主层 + `full` 降级。
 
 产出：
 
 | 文件 | 内容 |
 |---|---|
 | `out/conversations.json` | 会话列表 |
-| `out/raw/NNN.json` | 每个会话原始拉取结果（含 content 密文） |
-| `out/decrypted.jsonl` | 解密成功的明文（可追加，支持断点续跑） |
+| `out/raw/*.jsonl` | 每个会话逐页原始结果（含 content 密文），页级追加写 |
+| `out/state_fetch.json` | 拉取进度状态（中断后可续） |
+| `out/decrypted.jsonl` | 解密成功的明文（追加写，支持断点续跑） |
 | `out/messages.jsonl` | 合并后的完整明文语料 |
 
 `messages.jsonl` 每行格式：`{"session": "...", "time": "...", "sender": "...", "text": "..."}`
@@ -267,7 +281,7 @@ Claude Code 与 WorkBuddy **无需任何注册**——放进技能目录后靠 `
 |---|---|
 | `install.sh` | **一键部署**：建主源 + 三处符号链接 + 验证。Windows / macOS / Linux 通用，无建链权限时自动降级为拷贝 |
 | `sync_to_agents.sh` | **升级用**：把仓库文件同步到主源并 MD5 校验，同时报告三处技能目录状态 |
-| `scripts/dws_decrypt.py` | **主脚本**。拉列表 → 拉密文 → 逐条解密 → 合并，一条命令跑完，支持断点续跑。只依赖 Python 标准库 |
+| `scripts/dws_decrypt.py` | **主脚本**。会话清单（续 cursor）→ 手动分页拉取 → 提取密文（正文 + 引用原文）→ `safechat` 解密（`full` 降级）→ 合并。支持分组选择（`--kind direct/group/all`）、页级+条级断点续跑。只依赖 Python 标准库 |
 | `scripts/legacy/fetch_dm_cipher.py` | 【历史】只负责并行拉取带密文的单聊消息，是主脚本的前身 |
 | `scripts/legacy/merge_dm.py` | 【历史·下游分析】把已解密的单聊语料按关键词粗筛成「疑似待办」分片；**只筛不加，不增加可读消息数** |
 
@@ -286,17 +300,29 @@ export DWS_ME="你的钉钉昵称"
 | 项 | 实测 |
 |---|---|
 | 单条解密耗时 | 约 0.2s（进程启动开销占大头） |
-| 整体吞吐 | 约 **5 条/秒** |
+| 整体吞吐 | `--layer safechat` **6.61 QPS**；`--layer full` 4.16 QPS（慢 59%） |
 | 并发 | **16 → 32 无提升**，瓶颈在服务端限速，别浪费资源 |
-| 2.6 万条密文 | 约 80~90 分钟，**务必后台跑** |
-| 成功率 | 99.93%（失败几乎都是 `no_plaintext`，即空消息/已撤回） |
+| 长密文更慢 | 群聊正文 / 引用原文类长密文实测降到 3.9~5.5 条/秒 |
+| 拉取 | 176 个群 / 146,915 条 = 17 分钟（并发 8） |
+| 2.3 万条密文 | 约 80 分钟，**务必后台跑** |
+| 成功率 | **100%**（近 92 天全量 39,351 条密文零遗留） |
 
 **坑 1：多线程删临时文件会触发 safe-delete 守卫**
 并发调 `os.remove()` 会报 `[safe-delete][SAFE_DELETE_BULK_GUARD_ERROR] state lock timeout` 并让整个进程崩掉。
 → 临时文件放独立目录、按任务编号命名、**不要逐个删除**，最后统一清理。
 
-**坑 2：`--max-items 120` 会截断**
-早期脚本常用的 120 上限会导致高频会话被截断（实测 37/161 个会话中招）。批量拉取时保持默认 600 或更大。
+**坑 2：`--max-items` 会截断（任何非零值都会）**
+早期脚本常用 120 / 600 上限，导致高频会话被截（实测 10 个单聊缺了 07-07~08-24 整整一个半月）。
+→ **不要传该参数**，改用 `--direction newer` + `--time <下界>` 手动翻页。
+
+**坑 2b：`--direction older` 只有上界**
+会一路退回几年前（实测拉到 2024-10），白白多拉几万条。要时间窗就用 `newer` + 下界。
+
+**坑 2c：翻页游标别传整个 `nextPage`**
+`nextPage` 是个 dict（`{direction, nextCursor, time}`）。把它整体当 `--time` 传会返回 0 条，看起来像「翻页失效」。取 `nextPage['time']`。
+
+**坑 2d：会话清单单轮拉不完**
+`+recent-conversations` 常中途分页超时，返回 `endpoint_exhausted=false`。直接采信会得到残缺清单（实测 302 个 vs 补全后 344 个）。→ 带 `--cursor <next_token>` 续拉直到 `endpoint_exhausted=true`。
 
 **坑 3：升级 dws 会中断正在跑的任务**
 升级会替换 `dws.exe`，正在运行的拉取/解密脚本会失败。**升级放在跑批之前。**
@@ -311,6 +337,9 @@ export DWS_ME="你的钉钉昵称"
 |---|---|
 | `dws chat +search-msg` | 服务端搜索索引不覆盖单聊，返回 0 条 |
 | `dws chat message list-all` | 只返回本来就能读的消息，加密消息一条都不出现 |
+| `dws chat +chat-list --page-all` | 首页就 `pagination_error`；且返回的是 `openConversationId`（不是 `conversationId`），喂给 `message list` 拉不到数据 |
+| `dws chat crypto decrypt --layer ding` | v1.0.63 实测 **30/30 全失败**（服务端批量解密接口不可用）；v1.0.62 上返回 `not_encrypted` |
+| `dws chat crypto decrypt --file <绝对路径>` | 直接被拒：`--file must be a relative path within the current directory` |
 | `dws chat chmod` 申请 decrypt scope | scope 白名单只有 `chat.message:send` / `chat.message:list` / `chat.group:destroy` / `chat.data:cross-org`，**没有 decrypt** |
 | `dws config` | 32 个配置项里没有任何解密相关开关 |
 | 读本地钉钉数据库 `~/AppData/Roaming/DingTalk/<uid>_v2/DBFiles/dingtalk.db` | 文件头是自定义加密格式，非 SQLite 明文 |
@@ -335,6 +364,29 @@ dws aisearch enterprise --queries "<对方姓名>" --types im --time-range "最�
 - 不要把 `messages.jsonl` 提交到任何公开仓库
 
 本仓库的 `.gitignore` 已默认排除所有数据产物。
+
+## 更新日志
+
+### 2026-10-09（主脚本 v2）
+
+基于一次「近 92 天全量（单聊 + 群聊）」的实测重写，修正了 5 个会直接导致失败或丢数据的缺陷：
+
+| # | 问题 | 后果 | 修法 |
+|---|---|---|---|
+| 1 | `crypto decrypt --file` 传绝对路径 | 被 dws 拒绝，**整批 0 成功** | 改用 `cwd=tmp_dir` + 相对文件名 |
+| 2 | 主层用 `--layer full` | 4.16 QPS，比必要速度慢 59% | 主层改 `safechat`（6.61 QPS，同样 100%），`full` 降级；排除 `ding`（30/30 失败） |
+| 3 | 拉取传 `--max-items 600` | 10 个单聊会话缺一个半月 | 不传该参数，`--direction newer` + 下界手动翻页 |
+| 4 | 翻页把 `nextPage` 整个 dict 当 `--time` | 返回 0 条，误判为翻页失效 | 取 `nextPage['time']` |
+| 5 | 会话清单只拉一轮 | 残缺清单（302 vs 344 个会话） | 续 `--cursor` 直到 `endpoint_exhausted` |
+
+另外修正了一个**结论性错误**：原以为「群聊正文 100% 明文」（源自单日样本），实测 3 个月窗口内有 **18,692 条群聊正文是密文**。现已纳入统计并支持 `--kind all`。
+
+### 2026-10-07
+
+- 新增 `install.sh` / `sync_to_agents.sh`，部署改为「主源 + 符号链接」
+- 明确统计口径：可读 = 原始明文 + 解密明文；关键词筛选只减不增
+
+---
 
 ## License
 
