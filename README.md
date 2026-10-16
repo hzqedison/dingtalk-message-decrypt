@@ -134,15 +134,22 @@ dws chat message list --conversation-id <cid> \
 
 # 2. 逐条解密（--file 必须是相对路径！传绝对路径会被 dws 拒绝）
 cd /path/to/tmpdec
-dws chat crypto decrypt --file in_1.txt --layer safechat --format json
-# 成功返回：{"ok":true,"layer":"safechat","plaintext":"..."}
+dws chat crypto decrypt --file in_1.txt --layer full --format json
+# 成功返回：{"ok":true,"layer":"full","plaintext":"..."}
 ```
 
-`--layer` 三档的区别（v1.0.63 实测）：
+`--layer` 三档的区别（2026-10-16 修正）：
 
-- `safechat` = 纯本地解密。**最快（6.61 QPS）且 100% 成功 —— 用作主层**
-- `full` = SafeChat 本地 + Ding 服务端兜底。4.16 QPS，**慢 59%**，只作降级
+- `full` = 本地 SafeChat + **服务端 DING 层**。**只有它能对双层消息拿到明文，作主层**
+- `safechat` = 纯本地层。对双层消息只会返回 `1_1_<hex>` **信封，永远不是明文**，只作降级
 - `ding` = 单独调服务端批量解密接口，**实测 30/30 全失败，不要用**
+
+> ⚠️ **2026-10-16 起的能力警告**：服务端 DING 解密策略被企业侧关闭，
+> `full` 层直接报 `CRYPTO_DISABLED / crypto disabled by switch`（业务级错误，不是权限问题）。
+> 此时**解密能力为 0，客户端无解，只能找企业管理员开通**。动手前先跑一次 `full` 层自检。
+
+> ⚠️ **必须识别 `1_1_<hex>` 信封**（形如 `^\d+_\d+_[0-9a-f]+$`，长度恒等于原密文 `||2||1||N` 的 N）。
+> 它是「本地层已跑、服务端层没跑」的未完成状态，**绝不能当明文收下**。
 
 > **最高频的坑**：`--file` 传绝对路径会报
 > `--file must be a relative path within the current directory`，表现为整批 0 成功。
@@ -300,12 +307,12 @@ export DWS_ME="你的钉钉昵称"
 | 项 | 实测 |
 |---|---|
 | 单条解密耗时 | 约 0.2s（进程启动开销占大头） |
-| 整体吞吐 | `--layer safechat` **6.61 QPS**；`--layer full` 4.16 QPS（慢 59%） |
+| 整体吞吐 | `--layer full` 4.16 QPS；`safechat` 6.61 QPS（**但只有 full 能出明文**） |
 | 并发 | **16 → 32 无提升**，瓶颈在服务端限速，别浪费资源 |
 | 长密文更慢 | 群聊正文 / 引用原文类长密文实测降到 3.9~5.5 条/秒 |
 | 拉取 | 176 个群 / 146,915 条 = 17 分钟（并发 8） |
 | 2.3 万条密文 | 约 80 分钟，**务必后台跑** |
-| 成功率 | **100%**（近 92 天全量 39,351 条密文零遗留） |
+| 成功率 | **100%**（近 92 天全量 39,351 条密文零遗留）——**前提是服务端 DING 策略开启；2026-10-16 该策略已被企业关闭，成功率归 0** |
 
 **坑 1：多线程删临时文件会触发 safe-delete 守卫**
 并发调 `os.remove()` 会报 `[safe-delete][SAFE_DELETE_BULK_GUARD_ERROR] state lock timeout` 并让整个进程崩掉。
@@ -366,6 +373,23 @@ dws aisearch enterprise --queries "<对方姓名>" --types im --time-range "最�
 本仓库的 `.gitignore` 已默认排除所有数据产物。
 
 ## 更新日志
+
+### 2026-10-16（主脚本 v3：修正「safechat 主层」这个致命错误）
+
+同一条 10-06 的密文，10-09 能解出明文「[流鼻血]是啊，希望坚持一段时间…」，
+10-16 只能拿到 `1_1_<hex>`。根因：**服务端 DING 解密策略被企业侧关闭**。
+
+| # | 问题 | 后果 | 修法 |
+|---|---|---|---|
+| 1 | 把 `--layer safechat` 当主层 | 它只跑本地层，双层消息永远返回 `1_1_<hex>` 信封，**不可能是明文** | 主层改回 `full`（唯一含服务端 DING 层的链路），`safechat` 降级 |
+| 2 | 没识别 `1_1_<hex>` 信封 | `ok=true` + `plaintext` 非空 → **信封被当明文写进语料**，污染数据 | 新增 `is_envelope()`（`^\d+_\d+_[0-9a-f]+$`），命中即判失败并单独计数 |
+| 3 | SKILL.md / README 把 100% 写成无条件事实 | 后续 agent 会反复重试并误判是脚本 bug | 顶部加时效警告 + 10 秒自检表；`CRYPTO_DISABLED` 直接转管理员 |
+
+**已排除（别重复耗时）**：升级 v1.0.63→v1.0.64 输出逐字节相同；清空 `~/.dws/safechat/keystore`
+重拉企业密钥输出逐字节相同；token 有效（至 11-15）→ 与版本、密钥、账号权限均无关。
+
+**另一个新坑**：`+recent-conversations` 对**近 7 天窗口返回 0 个会话**（`+0 exhausted=true`），
+30 天窗口正常返回 318 个。窗口开太小会误判接口坏了。
 
 ### 2026-10-09（主脚本 v2）
 

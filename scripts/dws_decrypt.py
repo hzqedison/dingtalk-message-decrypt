@@ -12,8 +12,8 @@
 
 正确做法：
   1. 用底层 `dws chat message list` 拿 content 字段（密文原文，形如 "xxx...||2||1||228"）
-  2. 用 `dws chat crypto decrypt --layer safechat` 逐条解密（纯本地层，最快）
-     失败再降级 `--layer full`
+  2. 用 `dws chat crypto decrypt --layer full` 逐条解密（本地 SafeChat 层 + 服务端 DING 层，
+     **双层链路，只有它能拿到明文**）；失败再降级 `--layer safechat`（只能解单层消息）
 实测：近 92 天 172,819 条消息 / 39,351 条密文，还原率 100%。
 
 v2 修正（2026-10-09，来自一次 3 个月全量实测）
@@ -21,13 +21,32 @@ v2 修正（2026-10-09，来自一次 3 个月全量实测）
 1. crypto decrypt 的 --file **必须是相对路径**，传绝对路径会被 dws 拒绝
    （报错 "must be a relative path within the current directory"）。
    → 统一用 cwd=tmp_dir + 文件名的相对写法。
-2. 主解密层改 `--layer safechat`：同样 100% 成功，但 6.61 QPS vs full 的 4.16（快 59%）。
+2. ~~主解密层改 `--layer safechat`：同样 100% 成功，但 6.61 QPS vs full 的 4.16（快 59%）。~~
+   **该结论已于 2026-10-16 被推翻，见 v3。**
    `--layer ding` 实测 30/30 全失败，不要用。
 3. 拉取**不能传 --max-items**（任何非零值都会截断；600 曾让 10 个会话缺一个半月）。
    改为 `--direction newer` + `--time <下界>` 手动翻页，天然落在时间窗内。
 4. 分页游标是 `nextPage['time']`（nextPage 本身是个 dict），直接传整个 dict 会返回 0 条。
 5. **群聊正文也会加密**（旧版 SKILL.md 说「群聊正文 100% 明文」是错的，
    那是从单日样本得出的结论）。本工具默认也处理群聊。
+
+v3 修正（2026-10-16，企业侧 DING 解密策略被关闭）
+---------------------------------------------------
+1. **`--layer full` 是唯一能出明文的层**。它在服务端执行 DING 层解密；
+   `--layer safechat` 只跑本地层，对双层消息只会返回 `1_1_<hex>` 信封，**永远不是明文**。
+   → LAYER_CHAIN 已改为 ('full', 'safechat')。
+2. **必须识别 `1_1_<hex>` 信封并判为失败**（旧版没识别，把信封当明文写进了语料）。
+   判定：`^\\d+_\\d+_[0-9a-f]+$`；长度恒等于原密文 `||2||1||N` 的 N。
+   出现信封 = 服务端 DING 层没跑成，几乎总是策略关闭（见下）。
+3. 服务端关闭时 `full` 层直接报 `CRYPTO_DISABLED / crypto disabled by switch`（业务级错误，
+   非权限问题）。**这是企业侧策略开关，客户端无解，只能找管理员开通。**
+4. 已排除的因素（别重复踩）：
+   - 升级 dws 无用（v1.0.63 与 v1.0.64 行为完全一致，v1.0.64 无解密相关修复）
+   - 清空 ~/.dws/safechat/keystore 重新拉密钥无用（输出逐字节相同）
+   - 登录态/token 正常，与账号权限无关
+5. 一条命令自检（判断"策略关了"还是"环境坏了"）：
+   dws chat crypto decrypt --layer full --file <密文> -f raw
+   报 CRYPTO_DISABLED → 找管理员；返回 1_1_ → 同上；返回可读中文 → 环境正常。
 
 用法
 ----
@@ -64,8 +83,9 @@ ENC = '加密消息，无法解码'
 CIPHER_RE = re.compile(r'^[A-Za-z0-9+/=\s]+\|\|\d+(\|\|\d+)*$')
 SKIP_SESSIONS = ['钉钉文档自动化助手', 'AI听记助手', 'OA审批助手', '员工关怀', '差旅助手']
 
-# 主层 safechat（最快且 100%），失败降级 full；ding 实测不可用
-LAYER_CHAIN = ('safechat', 'full')
+# 主层 full（唯一能出明文的双层链路），降级 safechat（只能解单层）；
+# ding 实测不可用。full 依赖服务端 DING 解密策略，企业侧关闭时会报 CRYPTO_DISABLED。
+LAYER_CHAIN = ('full', 'safechat')
 FETCH_WORKERS = 8      # 拉取并发（服务端对会话列表/消息列表较敏感）
 DEC_WORKERS = 16       # 解密并发（16 封顶，32 无提升）
 
@@ -84,6 +104,22 @@ def jout(s):
         return json.loads(s)
     except Exception:
         return None
+
+
+ENVELOPE_RE = re.compile(r'^\d+_\d+_[0-9a-f]+$')
+
+
+def is_envelope(txt):
+    """True 表示这是未完成的信封（形如 1_1_<hex>），不是明文。
+
+    服务端 DING 解密策略被企业关闭时，本地 SafeChat 层只能剥掉第一层，
+    返回的就是这种信封；它的长度恒等于原密文 ||2||1||N 的 N。
+    v2 没识别它，直接当明文写进了语料 —— v3 起必须判为失败。
+    """
+    if not txt:
+        return False
+    s = txt.strip()
+    return len(s) > 8 and bool(ENVELOPE_RE.match(s))
 
 
 def msgs_of(j):
@@ -355,7 +391,14 @@ def decrypt_all(tasks, tmp_dir, out_path, workers=DEC_WORKERS):
                                  timeout=90, cwd=tmp_dir)
                 j = jout(so)
                 if j and j.get('ok') and j.get('plaintext'):
-                    plain, used = j['plaintext'], layer
+                    cand = j['plaintext']
+                    if is_envelope(cand):
+                        # 1_1_<hex>：本地层剥掉了 SafeChat，但服务端 DING 层没跑成。
+                        # 绝不能当明文收下（v2 就是这么污染语料的）。
+                        with lock:
+                            stats['envelope'] += 1
+                        continue
+                    plain, used = cand, layer
                     break
             if plain:
                 with lock:

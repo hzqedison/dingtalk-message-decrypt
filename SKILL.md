@@ -26,7 +26,24 @@ description: 读取钉钉单聊/群聊消息并解密「三方加密」密文。
 **关键结论：策略禁用的是「列表接口自动解密」，不代表解不开。手动调 `crypto decrypt` 可以解。**
 实测（2026-10-09，近 92 天全量）：172,819 条消息 / 39,351 条密文 / **还原率 100.0000%**。
 
+> ⚠️ **时效警告（2026-10-16 起）**：上面这个 100% 依赖**服务端 DING 层解密策略处于开启状态**。
+> 该策略现已被企业侧关闭（`full` 层报 `CRYPTO_DISABLED`），解密能力**当前为 0**。
+> 动手前先跑下面的自检；报 `CRYPTO_DISABLED` 就直接告知用户「需管理员开通」，不要反复重试。
+
 > 口径：**可读 = 原始明文 + 解密成功明文**。表中加密率是**解密前**分布，100% 是**解密后**可读率，两者不矛盾。
+
+## 环境自检（第一步就跑，10 秒出结论）
+
+```bash
+dws chat crypto decrypt --layer full --file <一条密文> -f raw
+```
+
+| 输出 | 含义 | 动作 |
+|---|---|---|
+| 可读中文 | 环境正常 | 正常跑批 |
+| `CRYPTO_DISABLED / crypto disabled by switch` | **企业侧关闭了服务端 DING 解密策略** | 无解，告诉用户找管理员开通，**停止重试** |
+| `1_1_<hex>` | 同上（本地层已跑，服务端层没跑） | 同上 |
+| `missing \|\|separators` | 传入的不是密文原文 | 检查取密文的步骤 |
 
 ## 前置条件（硬性）
 
@@ -36,7 +53,7 @@ dws upgrade          # v1.0.62 的 safechat 本地层会 cgo 崩溃（stack over
 ```
 
 v1.0.62 上 `crypto decrypt --layer safechat|full` 会直接崩溃，`--layer ding` 返回 `not_encrypted`。
-**升级是解锁解密能力的必要条件。**
+**升级是解锁解密能力的必要条件。**（v1.0.64 已实测，解密行为与 v1.0.63 完全相同，别指望升级解决策略问题。）
 
 ## 工作流
 
@@ -69,13 +86,26 @@ dws chat message list --conversation-id <cid> \
 ### 3. 逐条解密
 
 ```bash
-dws chat crypto decrypt --file <密文文件> --layer safechat --format json
-# 成功返回: {"ok":true,"layer":"safechat","plaintext":"..."}
+dws chat crypto decrypt --file <密文文件> --layer full --format json
+# 成功返回: {"ok":true,"layer":"full","plaintext":"可读明文"}
 ```
 
-- `--layer safechat` = 纯本地解密。**实测最快（6.61 QPS）且 100% 成功，用作主层**
-- `--layer full` = SafeChat 本地 + Ding 服务端兜底。**4.16 QPS，慢 59%**，只作降级
+- `--layer full` = 本地 SafeChat + **服务端 DING 层**。**只有它能对双层消息拿到明文，作主层**
+- `--layer safechat` = 纯本地层。对双层消息只会返回 `1_1_<hex>` **信封，永远不是明文**，只作降级
 - `--layer ding` = 单独调服务端批量解密接口，**实测 30/30 全失败，不要用**
+
+**⚠️ 必须识别 `1_1_<hex>` 信封并判为失败**（旧版没识别，把信封当明文写进了语料）：
+形如 `^\d+_\d+_[0-9a-f]+$`，长度恒等于原密文 `||2||1||N` 的 N。
+出现信封 = 服务端 DING 层没跑成，几乎总是策略关闭。
+
+**已排除的因素（2026-10-16 实测，别重复耗时）**：
+
+| 尝试 | 结果 |
+|---|---|
+| 升级 dws v1.0.63 → v1.0.64 | 输出**逐字节相同**，v1.0.64 release notes 无解密相关修复 |
+| 清空 `~/.dws/safechat/keystore` 强制重拉企业密钥 | 输出**逐字节相同**，不是密钥过期 |
+| 重新登录 / 换账号 | token 正常（有效期至 11-15），与账号权限无关 |
+| 把 `1_1_<hex>` 再喂给 decrypt | 报 `missing \|\|separators`，格式不被接受 |
 
 **坑（最高频）：`--file` 必须是相对路径。** 传绝对路径会被 dws 直接拒绝
 （`--file must be a relative path within the current directory`），表现为整批 0 成功。
@@ -109,7 +139,11 @@ python ~/.claude/skills/dingtalk-message-decrypt/scripts/dws_decrypt.py --days 9
 | 长密文更慢 | 群聊/引用类长密文实测降到 3.9~5.5 条/秒 |
 | 拉取 | 176 个群 / 146,915 条 = 17 分钟（并发 8） |
 | 2.3 万条密文 | 约 80 分钟，务必后台跑 |
-| 成功率 | 100%（3 个月全量 39,351 条密文零遗留） |
+| 成功率 | 100%（3 个月全量 39,351 条密文零遗留）——**该数字以服务端 DING 策略开启为前提** |
+
+**坑 5：`+recent-conversations` 对近 7 天窗口可能返回 0 个会话**
+2026-10-16 实测：7 天窗口 `+0 exhausted=true`（空），30 天窗口返回 318 个。
+→ 窗口别开太小；返回 0 时先用 30 天窗口验证接口本身没坏。
 
 **坑 1：临时文件删除会触发 safe-delete 守卫**
 多线程里 `os.remove()` 删临时文件会报 `[safe-delete][SAFE_DELETE_BULK_GUARD_ERROR] state lock timeout` 并让整个进程崩掉。
