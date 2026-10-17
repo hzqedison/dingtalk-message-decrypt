@@ -291,6 +291,7 @@ Claude Code 与 WorkBuddy **无需任何注册**——放进技能目录后靠 `
 | `scripts/dws_decrypt.py` | **主脚本**。会话清单（续 cursor）→ 手动分页拉取 → 提取密文（正文 + 引用原文）→ `safechat` 解密（`full` 降级）→ 合并。支持分组选择（`--kind direct/group/all`）、页级+条级断点续跑。只依赖 Python 标准库 |
 | `scripts/legacy/fetch_dm_cipher.py` | 【历史】只负责并行拉取带密文的单聊消息，是主脚本的前身 |
 | `scripts/legacy/merge_dm.py` | 【历史·下游分析】把已解密的单聊语料按关键词粗筛成「疑似待办」分片；**只筛不加，不增加可读消息数** |
+| `skills/dingtalk-plaintext-harvest/` | **配套技能·本地兜底**：企业侧关闭服务端解密（`CRYPTO_DISABLED`）时，改从钉钉客户端进程内存抓**显示层明文**。见下节 |
 
 `legacy/` 里的脚本保持原样归档，仅用于追溯当时的踩坑过程。**「拉密文 → 解密 → 合并」这条主链路已被 `dws_decrypt.py` 完整覆盖；但 `merge_dm.py` 里的「疑似待办」关键词筛选属于下游分析步骤，主脚本不含**，需要时可参考该脚本。日常解密请用主脚本。
 
@@ -299,6 +300,38 @@ Claude Code 与 WorkBuddy **无需任何注册**——放进技能目录后靠 `
 ```bash
 export DWS_ME="你的钉钉昵称"
 ```
+
+---
+
+## 配套技能：dingtalk-plaintext-harvest（服务端关闭解密时的本地兜底）
+
+本仓库的主链路依赖**服务端**参与解密（dws 的 `full` 层）。如果企业侧把该策略关掉，dws 会返回业务错误：
+
+```
+CRYPTO_DISABLED / crypto disabled by switch
+```
+
+此时客户端无解，只能找管理员开通。在开通之前，可以用配套技能 [`skills/dingtalk-plaintext-harvest/`](skills/dingtalk-plaintext-harvest/) 做**本地兜底**：
+
+**原理**：钉钉 PC 客户端能把加密消息解密显示给用户看 → 明文一定短暂存在于进程内存里。所以不去碰密钥、不逆向算法，而是被动监听进程内存，抓**显示层字段 `content.text`**（UI 实际展示的文字）。
+
+```bash
+cd skills/dingtalk-plaintext-harvest
+python harvest.py --seconds 300          # 后台监听 5 分钟，不控制窗口、不自动滚动
+python harvest.py --mark AbCdEf          # 只抓某个群（cid 特征片段）
+```
+
+**用法要点**
+
+- **被动监听**：脚本不碰钉钉窗口。你正常在钉钉里浏览，翻到哪段，那段就被客户端解密进内存，脚本就抓下来。
+- **不要传 `--mark` 覆盖率更高**：带 cid 过滤时要求文本附近 4000 字节内有群标记，实测会漏掉绝大多数（同一批消息：过滤 102 条 vs 不过滤 864 条）。不过滤的代价是可能混入客户端里同时可见的其他群内容。
+- 想提高覆盖：让用户在客户端从最早消息缓慢往下滚，滚动期间跑脚本。
+- 输出：脚本目录生成 `群明文_<群名>_<时间戳>.md`，按主题分类。
+- 局限：只能拿到"客户端曾加载过"的消息；显示层不存时间戳，要时间轴仍需结合 dws。
+
+**推荐工作流**：先后台起 `harvest.py`，同时用 dws 拉结构化消息（时间 + 发送人 + 密文），两者拼合——dws 给时间轴，harvest 给内容。
+
+依赖：Windows + 钉钉 PC 客户端已登录 + Python 3.9+（纯标准库，无需 pip）。
 
 ---
 
@@ -373,6 +406,16 @@ dws aisearch enterprise --queries "<对方姓名>" --types im --time-range "最�
 本仓库的 `.gitignore` 已默认排除所有数据产物。
 
 ## 更新日志
+
+### 2026-10-18（新增配套技能 `skills/dingtalk-plaintext-harvest/`）
+
+`CRYPTO_DISABLED` 仍然无解（确认是服务端策略，客户端改不了），因此新增一条**纯本地兜底链路**：
+不改密钥、不逆向，直接被动监听钉钉进程内存、抓显示层 `content.text`。
+
+- 实测（274 条消息的群，dws 明文 141 + 密文 133）：单轮被动监听 25 秒抓到 864 条唯一明文。
+- **关键发现**：`--mark`（群 cid 过滤）要求文本附近 4000 字节内有群标记，实测会漏掉绝大多数——
+  同一批消息过滤后只剩 102 条。默认已改为**不过滤**，需要时再传 `--mark`。
+- 覆盖率取决于客户端加载过多少消息：往上滚能显著提高（91→132 条），**单纯延长监听时长无效**。
 
 ### 2026-10-16（主脚本 v3：修正「safechat 主层」这个致命错误）
 
