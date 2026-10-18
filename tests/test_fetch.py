@@ -63,6 +63,21 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(data["messages"], [original])
         self.assertNotIn("--max-items", runner.calls[0])
 
+    def test_confidential_group_denial_is_explicit_and_resume_does_not_retry(self):
+        denial = json.dumps({'error':{'server_error_code':'1001',
+                            'message':'该群为保密群，无法获取消息记录'}})
+        _, report, runner = self.run_fetch([(1, '', denial)])
+        self.assertFalse(report['complete'])
+        self.assertEqual(report['errors'][0]['reason'], fetch.CONFIDENTIAL_GROUP_DENIAL)
+        _, resumed, runner = self.run_fetch([], resume=True)
+        self.assertEqual(runner.calls, [])
+        self.assertEqual(resumed['errors'][0]['reason'], fetch.CONFIDENTIAL_GROUP_DENIAL)
+
+    def test_generic_business_error_is_not_mislabeled_as_policy(self):
+        _, report, _ = self.run_fetch([(1, '', json.dumps({'error':{
+            'server_error_code':'1001','message':'invalid argument'}}))])
+        self.assertEqual(report['errors'][0]['reason'], 'command_failed')
+
     def test_strict_inclusive_time_filter(self):
         data, report, _ = self.run_fetch([page([message("a", LO), message("b", HI), message("before", "2026-10-12 23:59:59"), message("after", "2026-10-16 00:00:00")])])
         self.assertEqual([m["messageId"] for m in data["messages"]], ["a", "b"])

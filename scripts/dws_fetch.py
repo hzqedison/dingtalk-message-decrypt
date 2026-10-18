@@ -14,6 +14,9 @@ from pathlib import Path
 import subprocess
 
 
+CONFIDENTIAL_GROUP_DENIAL = "policy_restricted_confidential_group"
+
+
 def _runner(cmd, timeout=120, cwd=None):
     try:
         p = subprocess.run(cmd, timeout=timeout, cwd=cwd, capture_output=True)
@@ -66,7 +69,16 @@ def _json(text):
 
 def _call(runner, cmd, timeout):
     try:
-        rc, stdout, _ = runner(cmd, timeout=timeout, cwd=None)
+        rc, stdout, stderr = runner(cmd, timeout=timeout, cwd=None)
+        for text in (stdout, stderr):
+            try:
+                envelope = _json(text)
+            except (ValueError, TypeError):
+                continue
+            detail = envelope.get("error") if isinstance(envelope, dict) else None
+            if (isinstance(detail, dict) and str(detail.get("server_error_code")) == "1001"
+                    and detail.get("message") == "该群为保密群，无法获取消息记录"):
+                return None, CONFIDENTIAL_GROUP_DENIAL
         if rc != 0:
             return None, "command_failed"
         result = _json(stdout)
@@ -279,6 +291,13 @@ def fetch_snapshot(out_dir, start, end, conversation_ids=None, kind="all",
                 error = "raw_checkpoint_invalid"
             else:
                 state = dict(previous)
+        if resume and state_path.exists():
+            try:
+                saved = _json(state_path.read_text(encoding="utf-8"))
+                if saved.get("conversationId") == cid and saved.get("stop_reason") == CONFIDENTIAL_GROUP_DENIAL:
+                    error = CONFIDENTIAL_GROUP_DENIAL
+            except (OSError, ValueError, AttributeError):
+                error = "state_checkpoint_invalid"
         if error:
             state.update(complete=False, stop_reason=error)
         else:
