@@ -205,6 +205,8 @@ class FetchTests(unittest.TestCase):
         self.assertTrue(report['complete'])
         self.assertEqual(report['conversation_count'],1)
         self.assertEqual(len(data['messages']),1)
+        self.assertEqual(data['messages'][0]['conversationTitle'],'fixture group')
+        self.assertIs(data['messages'][0]['singleChat'],False)
         self.assertEqual(len(runner.calls),2)
 
     def test_unknown_success_shape_is_not_zero_complete(self):

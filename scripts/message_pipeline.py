@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 from collections import Counter, defaultdict
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -99,6 +100,43 @@ def message_identity(row):
 
 def identity_key(identity):
     return json.dumps(identity, sort_keys=True, separators=(',', ':'))
+
+
+def resolve_empty_quote_reference(quote, known, result, cid, mid):
+    """Bind an empty quote only to a unique, explicit and independently read message."""
+    def failed(reason):
+        return {'status':'unresolved', 'reason':reason}
+    for row in (quote, known):
+        for names, expected in ((('openConversationId','conversationId'),cid),
+                                (('openMessageId','messageId'),mid)):
+            values = [row[k] for k in names if k in row]
+            if not values or any(not isinstance(v,str) or not v or v != expected for v in values):
+                return failed('incomplete_or_conflicting_quote_reference_identity')
+        if any(row.get(k) not in (None,False,0,'false','0') for k in ('recalled','isRecall','isRecalled')):
+            return failed('quote_reference_recall_state')
+    if not isinstance(quote.get('createTime'),str) or not quote['createTime'] or quote['createTime'] != known.get('createTime'):
+        return failed('conflicting_quote_reference_time')
+    try:
+        datetime.fromisoformat(quote['createTime'].replace('Z','+00:00'))
+    except ValueError:
+        return failed('invalid_quote_reference_time')
+    sender = quote.get('senderOpenDingTalkId')
+    if not isinstance(sender,str) or not sender or sender != known.get('senderOpenDingTalkId'):
+        return failed('incomplete_or_conflicting_quote_reference_sender')
+    if quote.get('sender') and known.get('sender') and quote['sender'] != known['sender']:
+        return failed('conflicting_quote_reference_sender_name')
+    try:
+        qi, ki = message_identity(quote), message_identity(known)
+        if any(ki.get(k) != v for k,v in qi.items()):
+            return failed('conflicting_quote_crypto_identity')
+    except ValueError:
+        return failed('conflicting_quote_crypto_identity')
+    if result.get('status') == 'unresolved' or not plaintext(result.get('text')):
+        return failed('quote_reference_body_unresolved')
+    return {**result, 'resolved_via':'exact_message_reference', 'reference_reused':True,
+            'reference_binding':{'conversation_id':cid, 'message_id':mid,
+                                 'create_time':known['createTime'], 'sender_open_dingtalk_id':sender,
+                                 'text_sha256':sha(result['text'])}}
 
 
 LOCAL_METADATA = ('enterprise', 'key_version', 'crypto_type', 'identity_source', 'client_dll_sha256',
@@ -446,6 +484,8 @@ def resolve_batch(input_paths, out_dir, scope='output-local', server='auto', cli
                 known=unique.get((qcid,qid)) if valid_qcid else None
                 if not valid_qcid:
                     quote_result={'status':'unresolved','reason':'invalid_quote_conversation_identity'}
+                elif known is not None and body_of(quote) == '':
+                    quote_result=resolve_empty_quote_reference(quote,known,body_results[(qcid,qid)],qcid,qid)
                 elif known is not None and body_of(known)==body_of(quote):
                     try:
                         qi, ki = message_identity(quote), message_identity(known)
@@ -462,6 +502,8 @@ def resolve_batch(input_paths, out_dir, scope='output-local', server='auto', cli
                 else:
                     quote_result={'status':'unresolved','reason':'missing_quote_identity'}
                 counts['quote_'+quote_result['status']]+=1
+                if quote_result.get('resolved_via') == 'exact_message_reference':
+                    counts['quote_reference_recovered']+=1
                 if quote_result['status']=='unresolved':
                     unresolved.append({'conversation_id':cid,'message_id':mid,'field':'quotedMessage',**quote_result})
             resolved.append({'original':row,'resolution':{'body':result,'quoted_message':quote_result}})
