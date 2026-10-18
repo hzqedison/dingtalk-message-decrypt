@@ -47,10 +47,9 @@ while IFS= read -r f; do
   else
     echo "  DIFF $f"; fail=1
   fi
-done < <(cd "$SRC" && find . -type f \
-          ! -path "./.git/*" \
-          ! -name "install.sh" \
-          ! -name "sync_to_agents.sh" | sed 's|^\./||')
+done < <(cd "$SRC" && find SKILL.md README.md LICENSE scripts references -type f \
+          \( -name '*.py' -o -name '*.md' -o -name LICENSE \) \
+          ! -path '*/__pycache__/*' ! -path 'scripts/legacy/*')
 
 echo
 echo "== 三处技能目录状态 =="

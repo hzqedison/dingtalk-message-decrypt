@@ -21,6 +21,9 @@ skill_test/
 # Python
 __pycache__/
 *.pyc
+*.sqlite3
+*.sqlite3-*
+.pipeline.lock
 .venv/
 
 # 编辑器 / 系统
