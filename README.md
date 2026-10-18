@@ -1,68 +1,76 @@
-# dingtalk-message-decrypt
+# 钉钉聊天记录读取与解密 · Agent Skill
 
-给 agent 使用的钉钉消息批处理技能：读取原始消息、处理三方密文、保存进度和缓存，输出可读内容及未解决项。批处理阶段不调用大模型，模型只需读取汇总并分析需要的正文。
+让 AI 读取你的钉钉单聊和群聊，自动处理加密消息，用于总结、周报、待办和决策追溯。
 
-服务端 `full` 返回 `CRYPTO_DISABLED` 时会记住状态，停止无效重试，并自动尝试已验证的 Windows 本地解密链路。它将 dws SafeChat 中间信封交给确定性 DING 解码器，以明确企业和版本的客户端缓存 key 解密，key不落盘。消息不必显示在当前界面。缺key、缺身份或未知客户端版本仍保留缺口；旧版把中间信封当明文的“100%”结论已撤回。
+## 给 Agent 的一句话
 
-## 使用
+> 需要读取钉钉聊天记录时，先读本仓库的 [SKILL.md](SKILL.md)，按用户指定的会话和时间运行 `scripts/dws_decrypt.py`，再读取 `summary.json` 和 `messages.jsonl` 完成分析，并说明未读到的内容。
 
-需要 Python 3.10+，已安装并登录的 dws >=1.0.63。本地解密另需 `pefile`、PyCryptodome及已登录的已验证版本 Windows 钉钉。不会自动安装、切账号或更改钉钉配置。
+把仓库链接发给你的 AI，再告诉它具体任务即可，例如：
 
 ```text
-python scripts/dws_decrypt.py --input raw.json --out out --scope my-work
-python scripts/dws_decrypt.py --conversation-id <真实CID> --days 30 --out out-chat --scope my-work
-python scripts/dws_decrypt.py --days 92 --kind all --out out-all --scope my-work
-python scripts/dws_decrypt.py --out out-all --scope my-work --resume
+请使用 https://github.com/hzqedison/dingtalk-message-decrypt 这个技能，
+读取「项目讨论群」最近 7 天的聊天，整理结论、待办和未解决的问题。
 ```
 
-已确认服务端策略关闭时加 `--known-policy-disabled`，同一输出目录之后自动记住；离线检查加 `--server off --client off`。账号切换后必须换 scope 和输出目录，标签不替代真实账号选择。
+Agent 需要能执行本机脚本，并加载这个技能。Codex、Claude Code、WorkBuddy 可共用同一份安装；直接运行原始 `dws` 命令不会自动获得此能力。
 
-读取 `summary.json` 获取数量和缺口，`messages.jsonl` 获取可读正文；`resolved.jsonl` 保留原始输入和独立解析结果。退出码 0 / 2 / 1 分别表示提供记录已解决、部分完成、执行错误。导入快照的分页完整性仍为 unknown。
+## 实际怎么用
 
-本地解密缓存按 scope、CID、密文及显式企业身份隔离，重放标记为 `decrypted_local_cache`，保留 `enterprise`、`key_version`、`identity_source` 和原始解密来源，不计作本轮重新解密。旧缓存只有在同 scope 的 `resolved.jsonl` 提供匹配的消息身份、密文哈希和正文时才恢复本地来源；仅有旧缓存正文不能推断来源。已有原始输入与合法缓存时，用 `--input raw.json --server off --client off` 可纯离线重放，不需要打开目标会话。
+已安装技能后，运行统一入口。`<skill>` 是 `SKILL.md` 所在目录；替换下方占位符，CID 从钉钉接口的真实结果获取。
 
-[SKILL.md](SKILL.md) 是 agent 入口；详细参数、输出和限制见 [automation.md](references/automation.md)。
+```text
+python <skill>/scripts/dws_decrypt.py --conversation-id <真实CID> --days 7 --out <结果目录> --scope <账号标签>
+```
 
-## 安装与路由
+脚本负责读取、分页、解密和保存进度；批处理不调用大模型，也不需要你逐条打开或阅读消息。AI 按顺序读取结果：
 
-仓库访问由 owner 授权。源码保留在 Git 仓库，部署主源为 `~/.agents/skills/dingtalk-message-decrypt`，`.codex`、`.claude`、`.workbuddy` 通过链接跟随。
+| 输出 | Agent 用它做什么 |
+| --- | --- |
+| `summary.json` | 先确认读到了多少、范围是否完整、有哪些缺口 |
+| `messages.jsonl` | 按任务需要读取正文，生成总结、周报或待办 |
+| `unresolved.jsonl` | 说明仍未解决的内容，不猜测缺失正文 |
 
-已有部署升级：
+已有原始消息文件时，用 `--input <raw.json或raw.jsonl>` 替换会话和时间参数。中断后，用同一 `--out`、`--scope` 加 `--resume` 继续，不再传 `--days`。退出码 `2` 表示有部分结果，应先检查汇总；账号切换后使用新的结果目录和账号标签。
+
+## 使用条件
+
+- Python 3.10+，已安装并登录的 `dws >= 1.0.63`。
+- 本地解密还需要 `pefile`、PyCryptodome，以及已登录、版本匹配的 Windows 钉钉；当前验证版本为 `9.0.2.261015001`。
+- 服务端解密不可用时，脚本会尝试本地解密。缺少匹配密钥、身份信息或遇到未知客户端版本时，会保留未解决项，不能保证全部历史可读。
+
+完整参数、解密方式和验证边界见 [使用说明](references/automation.md)。
+
+## 安装与更新
+
+将本仓库放在本机，首次安装前检查 `install.sh`，保存已有的同名技能目录，再从仓库目录运行：
+
+```bash
+bash install.sh
+```
+
+Windows 请使用 Git Bash。主目录为 `~/.agents/skills/dingtalk-message-decrypt`；安装脚本为 `.codex`、`.claude`、`.workbuddy` 创建入口。以后更新仓库后运行：
 
 ```bash
 bash sync_to_agents.sh
 ```
 
-首次部署可检查并运行 `install.sh`。安装脚本会创建三处宿主链接，已有同名实体目录应先保存；升级只用同步脚本。
-
-如 dws 聊天技能没有解密路由，可明确指定文件安装（文件首次修改前会保存备份，重复执行幂等）：
+若要让已有的 dws 聊天技能自动使用此流程，可为它安装路由（首次修改会备份）：
 
 ```text
-python scripts/install_routes.py --skill-file <dingtalk-chat/SKILL.md>
+python scripts/install_routes.py --skill-file <聊天技能的SKILL.md路径>
 ```
 
-对独立 dws 单技能入口可重复传 `--skill-file`。此路由仅影响聊天记录读取。上游重装若覆盖路由需重跑；不替换 dws 可执行文件。不同 agent 必须实际加载技能后才会遵循此流程，不能保证所有未知 agent 自动使用。
+这只修改指定技能的调用指引，不替换 `dws` 程序。其他 Agent 可按各自的技能加载方式加载 [SKILL.md](SKILL.md)。
 
-## 验证
+## 验证与技术文档
+
+已通过 160 项离线测试，并用真实单聊、群聊快照验证；其中 11 条独立样本与客户端正文逐字节一致。详细范围、未解决项及历史验证记录见 [验证说明](references/automation.md#目前的验证结论2026-10-18)。
 
 ```text
 python -m unittest discover -s tests -v
 ```
 
-测试用合成数据/fake runner，验证分页恢复、重复记录、引用、策略熔断、缓存隔离、信封拒绝和客户端身份边界，不调用模型或在线接口。
+开发者可继续阅读 [本地解密路径](references/client-paths.md)。[已加载正文采集工具](skills/dingtalk-plaintext-harvest/SKILL.md) 仅用于辅助观察；日常读取使用上面的统一入口。
 
-真实算法验证：11条不同消息通过原始密文→SafeChat信封→本地DING解密，全部与独立保存的客户端正文逐字节一致，其中1条曾由用户核对。生产入口也通过该确认样本。测试并不代表所有企业、历史版本或单聊已覆盖，具体运行看summary中的来源和缺口。
-
-整批生产快照：273条原始记录，126条原始明文加133条本地解密正文，共259条可读正文；29条加密引用亦解决。14条空正文和1条空引用保留未解决。服务端full调用0，SafeChat调用133次、会话身份查询1次，未扫描界面消息。160项离线回归测试通过。
-
-单聊也已接入自动路径：缺消息oid时，一次扫描精确CID的原生会话组织元数据，只有完整、稳定且无分歧的候选才采用。两个单聊28条近期记录中16条密文正文与4条密文引用恢复，共27条可读正文、1条空内容；无需打开或逐条阅读。当前会话身份不证明所有历史归属稳定，缺候选或身份冲突仍保留未解决。
-
-扩大历史验证：三个单聊1456条输入（记录日期跨度2024-10-08至2026-10-06，导入快照不表示该跨度完整），1174条密文正文和77条密文引用全部恢复，加245条原始明文，共1419条可读正文。37条空正文和2条空引用仍未解决，剩余密文为0。full调用0、SafeChat调用1174、会话查询3次、身份扫描1次；不需正文观察或界面操作。
-
-缓存升级另在原批次副本验证：`--server off --client off` 成功迁移133条本地缓存，259条可读正文按原顺序、CID和消息ID逐条相同，133条正文与29条引用的企业、版本及身份来源保留。运行禁止外部进程调用，原批次文件哈希未变；原有15个未解决字段仍保留，离线重放没有新增可读消息。
-
-聊天原文、密文、SQLite 缓存及运行日志不进入 Git，也不随技能同步。历史旧脚本仅保留在 `scripts/legacy/` 供审计，不作为运行入口。
-
-## 既有明文采集工具
-
-远端已有的 [dingtalk-plaintext-harvest](skills/dingtalk-plaintext-harvest/SKILL.md) 保留作为已加载正文的辅助观察工具。默认读取与解密请使用本仓库统一入口；`CRYPTO_DISABLED` 不再意味着本地独立解密不可用。采集结果可能混合会话，缺少精确消息身份时须单独保存，不能按附近时间、文本顺序或群标记片段回填 API 密文消息。
+聊天数据、密钥和运行缓存不提交到本仓库，也不随技能同步。
