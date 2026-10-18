@@ -13,6 +13,8 @@
 读取会话使用 `+recent-conversations` 的 cursor 到 `endpoint_exhausted`；正文用 `chat message list` 的 `--direction newer` 与时间下界，继续 `nextPage.time`，不传 `--max-items`。
 成功翻页和正文可读是两个维度。导入快照若没有分页报告，读取完整性标记 unknown。
 
+2026-10-19 修复会话发现的响应适配：正常成功的会话列表位于 `data.conversations`，完成页块可位于 `data.succeeded[*].conversations`，两者均需显式识别；未知结构不能按空列表处理。旧版可能漏掉正常成功响应中的全部会话并误标“零条且完整”，有此结果的跨会话批次需使用新输出目录重新采集，不能沿用旧的完成检查点。按明确 CID 读取的历史验证不受此问题影响。
+
 | 文件 | 用途 |
 |---|---|
 | `summary.json` | 数量、状态、读取完整性、停止原因、客户端补充结果；模型先只读它 |

@@ -212,7 +212,15 @@ def fetch_snapshot(out_dir, start, end, conversation_ids=None, kind="all",
                 errors.append({"stage": "conversations", "reason": error})
                 break
             _append(raw / "fetch-conversations.jsonl", {"cursor": cursor, "response": response})
-            blocks = response.get("data", {}).get("succeeded", []) if isinstance(response.get("data"), dict) else None
+            data = response.get("data")
+            blocks = None
+            if isinstance(data, dict):
+                if isinstance(data.get("conversations"), list) and "succeeded" not in data:
+                    # Normal success projects conversations directly under data.
+                    blocks = [data]
+                elif isinstance(data.get("succeeded"), list) and "conversations" not in data:
+                    # Completed-page blocks are used by the partial-result envelope.
+                    blocks = data["succeeded"]
             pagination = response.get("meta", {}).get("pagination") if isinstance(response.get("meta"), dict) else None
             if not isinstance(blocks, list) or not isinstance(pagination, dict):
                 errors.append({"stage": "conversations", "reason": "invalid_response_shape"})
@@ -231,8 +239,9 @@ def fetch_snapshot(out_dir, start, end, conversation_ids=None, kind="all",
             discovery["conversations"] = list(known.values())
             next_cursor = pagination.get("next_token")
             exhausted = pagination.get("endpoint_exhausted") is True
-            failed_blocks = response.get("data", {}).get("failed")
-            if invalid or failed_blocks or response.get("failedCount", 0):
+            failed_blocks = data.get("failed")
+            if (invalid or failed_blocks or response.get("failedCount", 0)
+                    or exhausted and data.get("complete") is False):
                 error = "upstream_partial"
             elif exhausted:
                 discovery["complete"] = True
