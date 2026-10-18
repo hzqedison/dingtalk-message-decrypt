@@ -158,7 +158,7 @@ def _read_pages(path):
 
 
 def fetch_snapshot(out_dir, start, end, conversation_ids=None, kind="all",
-                   resume=False, runner=None, max_pages=2000):
+                   resume=False, runner=None, max_pages=2000, policy_store=None):
     """Return (Path to api_snapshot.json, machine-readable completeness report).
 
     New runs require start/end. Resume accepts None for either bound and loads
@@ -278,12 +278,18 @@ def fetch_snapshot(out_dir, start, end, conversation_ids=None, kind="all",
     unique = {}
     conflicts = set()
     raw_count = outside_count = invalid_count = duplicate_count = 0
+    policy_cached_skips = 0
     for conv in targets:
         cid = conv["conversationId"]
         token = hashlib.sha256(cid.encode("utf-8")).hexdigest()
         raw_path = raw / ("fetch-" + token + ".jsonl")
         state_path = root / ("fetch-state-" + token + ".json")
-        pages, error = _read_pages(raw_path)
+        stored_denial = policy_store.get(cid) if policy_store is not None else None
+        if stored_denial:
+            pages, error = [], stored_denial
+            policy_cached_skips += 1
+        else:
+            pages, error = _read_pages(raw_path)
         state = {"pages": 0, "cursor": start, "complete": False, "stop_reason": "new"}
         if pages:
             previous = pages[-1].get("checkpoint")
@@ -291,7 +297,7 @@ def fetch_snapshot(out_dir, start, end, conversation_ids=None, kind="all",
                 error = "raw_checkpoint_invalid"
             else:
                 state = dict(previous)
-        if resume and state_path.exists():
+        if not stored_denial and resume and state_path.exists():
             try:
                 saved = _json(state_path.read_text(encoding="utf-8"))
                 if saved.get("conversationId") == cid and saved.get("stop_reason") == CONFIDENTIAL_GROUP_DENIAL:
@@ -300,6 +306,8 @@ def fetch_snapshot(out_dir, start, end, conversation_ids=None, kind="all",
                 error = "state_checkpoint_invalid"
         if error:
             state.update(complete=False, stop_reason=error)
+            if policy_store is not None and error == CONFIDENTIAL_GROUP_DENIAL:
+                policy_store.remember(cid, error)
         else:
             for _ in range(max_pages):
                 if state["complete"]:
@@ -309,6 +317,8 @@ def fetch_snapshot(out_dir, start, end, conversation_ids=None, kind="all",
                        "--format", "json", "--timeout", "45"]
                 response, error = _call(runner, cmd, 60)
                 if error:
+                    if policy_store is not None and error == CONFIDENTIAL_GROUP_DENIAL:
+                        policy_store.remember(cid, error)
                     state.update(complete=False, stop_reason=error)
                     break
                 checkpoint = _checkpoint_page(response, state["cursor"], hi, len(pages) + 1)
@@ -322,6 +332,10 @@ def fetch_snapshot(out_dir, start, end, conversation_ids=None, kind="all",
                     break
             else:
                 state.update(complete=False, stop_reason="max_pages")
+        if state['stop_reason'] == CONFIDENTIAL_GROUP_DENIAL:
+            # Keep the raw evidence, but do not export earlier pages once this
+            # conversation's read path has explicitly been denied.
+            pages = []
         for page in pages:
             payload = _message_payload(page["response"])
             if payload is None:
@@ -368,6 +382,7 @@ def fetch_snapshot(out_dir, start, end, conversation_ids=None, kind="all",
               "conversations": statuses, "conversation_count": len(targets), "message_count": len(messages),
               "raw_message_count": raw_count, "out_of_window_records": outside_count,
               "duplicate_records": duplicate_count, "invalid_records": invalid_count,
+              "policy_store_enabled": policy_store is not None, "policy_cached_skips": policy_cached_skips,
               "conflicting_message_count": len(conflicts), "errors": errors,
               "readability_assessed": False, "decryption_attempted": False}
     snapshot_path = root / "api_snapshot.json"
