@@ -62,3 +62,7 @@ python -m unittest discover -s tests -v
 缓存升级另在原批次副本验证：`--server off --client off` 成功迁移133条本地缓存，259条可读正文按原顺序、CID和消息ID逐条相同，133条正文与29条引用的企业、版本及身份来源保留。运行禁止外部进程调用，原批次文件哈希未变；原有15个未解决字段仍保留，离线重放没有新增可读消息。
 
 聊天原文、密文、SQLite 缓存及运行日志不进入 Git，也不随技能同步。历史旧脚本仅保留在 `scripts/legacy/` 供审计，不作为运行入口。
+
+## 既有明文采集工具
+
+远端已有的 [dingtalk-plaintext-harvest](skills/dingtalk-plaintext-harvest/SKILL.md) 保留作为已加载正文的辅助观察工具。默认读取与解密请使用本仓库统一入口；`CRYPTO_DISABLED` 不再意味着本地独立解密不可用。采集结果可能混合会话，缺少精确消息身份时须单独保存，不能按附近时间、文本顺序或群标记片段回填 API 密文消息。
