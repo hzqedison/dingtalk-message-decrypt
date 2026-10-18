@@ -6,6 +6,8 @@ enterprise/version key is used, never trial-decrypting across enterprises.
 from pathlib import Path
 from datetime import datetime, timezone
 import re
+import importlib
+import sys
 
 from ding_codec import parse_envelope, decrypt_envelope
 from message_pipeline import plaintext, strict_json, unpack, sha
@@ -28,9 +30,28 @@ class NativeDecryptor:
         self.metadata_calls = 0
         self.halted = None
         self.version_checked = False
+        self.dependencies = None
+
+    def check_dependencies(self):
+        if self.dependencies is None:
+            self.dependencies = {}
+            for module, package in (('Crypto.Cipher.AES', 'pycryptodome'), ('pefile', 'pefile')):
+                try:
+                    importlib.import_module(module)
+                    self.dependencies[module] = {'status':'available','package':package}
+                except (ImportError, OSError, RuntimeError, ValueError):
+                    # Import errors can contain local paths or arbitrary library text.
+                    self.dependencies[module] = {'status':'unavailable','package':package,
+                        'install_command':[sys.executable,'-m','pip','install',package]}
+        if any(item['status'] != 'available' for item in self.dependencies.values()):
+            self.halted = 'local_dependency_unavailable'
+            return False
+        return True
 
     def initialize(self):
         if self.halted:
+            return False
+        if not self.check_dependencies():
             return False
         try:
             if self.provider is None:
@@ -125,6 +146,7 @@ class NativeDecryptor:
             return {'status':'unresolved','reason':'invalid_message_crypto_metadata'}
         if any('safety_priority' in obj and str(obj['safety_priority']) != '0' for obj in (row,extension)):
             return {'status':'unresolved','reason':'unsupported_local_layer_order'}
+        stage = 'enterprise_identity'
         try:
             explicit_corps = {str(obj[key]) for obj in (row,extension) for key in ('corpId','corp_id','enterprise') if key in obj}
             if len(explicit_corps)>1 or any(not re.fullmatch(r'ding[0-9a-zA-Z]+',corp) for corp in explicit_corps):
@@ -150,18 +172,23 @@ class NativeDecryptor:
                     else 'group_conversation_info_corp_id')
             if not corp:
                 return {'status':'unresolved','reason':'local_enterprise_identity_unavailable'}
+            stage = 'safechat_input'
             self.out.mkdir(parents=True,exist_ok=True)
             file = self.out/'cipher.txt'
             file.write_text(cipher,encoding='utf-8')
             self.calls += 1
+            stage = 'safechat_call'
             rc, output, _ = self.runner(['dws','chat','crypto','decrypt','--layer','safechat','--file',file.name,'--format','json'],timeout=45,cwd=str(self.out.resolve()))
             payload = strict_json(output)
             if rc or not isinstance(payload,dict) or payload.get('ok') is not True:
                 self.halted = 'safechat_intermediate_failed'
                 return {'status':'unresolved','reason':self.halted}
             inner = payload.get('plaintext')
+            stage = 'envelope_validation'
             envelope = parse_envelope(inner)
+            stage = 'key_lookup_or_unwrap'
             key = self.provider.get_key_for_enterprise(corp,envelope.key_version,envelope.crypto_type)
+            stage = 'body_decryption_or_validation'
             decoded = decrypt_envelope(inner,key,expected_version=envelope.key_version).decode('utf-8',errors='strict')
             if not plaintext(decoded):
                 return {'status':'unresolved','reason':'invalid_local_plaintext'}
@@ -173,11 +200,13 @@ class NativeDecryptor:
                     'plaintext_validation':'strict_pkcs7_and_utf8','independent_body_comparison':False}
         except (ValueError, OSError, RuntimeError, ImportError, KeyError, TypeError):
             # Never serialize library errors or decoded key buffers to output.
-            return {'status':'unresolved','reason':'local_identity_key_or_payload_validation_failed'}
+            return {'status':'unresolved','reason':'local_identity_key_or_payload_validation_failed',
+                    'failure_stage':stage}
 
     def summary(self):
         return {'safechat_calls':self.calls,'conversation_metadata_calls':self.metadata_calls,
                 'stop_reason':self.halted,'keys_written_to_disk':False,
+                'python_executable':sys.executable,'dependencies':self.dependencies,
                 'conversation_identity_evidence':list(self.conversation_evidence.values()),
                 'key_provider':getattr(self.provider,'metadata',None),
                 'native_conversation_provider':getattr(self.conversation_provider,'summary',None),

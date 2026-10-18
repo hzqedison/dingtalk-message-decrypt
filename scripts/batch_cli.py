@@ -129,7 +129,10 @@ def execute(args):
             if local is not None:
                 local.close()
         client_report = {'status': 'off' if args.client == 'off' else 'not_needed'}
-        if args.client == 'auto' and report['counts'].get('encrypted_body_unresolved', 0):
+        dependency_blocked = report['local_crypto'].get('stop_reason') == 'local_dependency_unavailable'
+        if args.client == 'auto' and dependency_blocked:
+            client_report = {'status':'unavailable','reason':'local_dependency_unavailable'}
+        if args.client == 'auto' and not dependency_blocked and report['counts'].get('encrypted_body_unresolved', 0):
             from client_bridge import capture_loaded
             client_report = capture_loaded(inputs, root)
             if client_report.get('index') and client_report.get('api_bound_messages',0) > 0:

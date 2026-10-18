@@ -51,6 +51,9 @@ done < <(cd "$SRC" && find SKILL.md README.md LICENSE scripts references -type f
           \( -name '*.py' -o -name '*.md' -o -name LICENSE \) \
           ! -path '*/__pycache__/*' ! -path 'scripts/legacy/*')
 
+if [ "$fail" -ne 0 ]; then exit "$fail"; fi
+python "$SRC/scripts/deployment_info.py" --source "$SRC" --destination "$DST" || exit 1
+
 echo
 echo "== 三处技能目录状态 =="
 for d in .claude .codex .workbuddy; do

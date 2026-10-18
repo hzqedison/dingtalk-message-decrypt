@@ -41,6 +41,8 @@ python <skill>/scripts/dws_decrypt.py --conversation-id <真实CID> --days 7 --o
 
 完整参数、解密方式和验证边界见 [使用说明](references/automation.md)。
 
+另一台电脑运行失败时，先看 `summary.json` 的 `local_crypto.dependencies`。缺少 `Crypto` 应在运行脚本的同一 Python 环境安装 `pycryptodome`；报告中的 `install_command` 给出了对应解释器。不要仅凭 `cached_key_count=0` 判断客户端缺密钥。具体步骤见 [跨设备排查](references/automation.md#跨设备排查)。
+
 ## 安装与更新
 
 将本仓库放在本机，首次安装前检查 `install.sh`，保存已有的同名技能目录，再从仓库目录运行：
@@ -55,6 +57,8 @@ Windows 请使用 Git Bash。主目录为 `~/.agents/skills/dingtalk-message-dec
 bash sync_to_agents.sh
 ```
 
+安装和同步会生成本地 `deployment.json`，记录源码提交、是否有未提交修改及部署文件哈希。部署目录没有 `.git` 是正常现象；执行 `python <skill>/scripts/deployment_info.py` 可核验来源和文件是否变动。旧部署没有该文件时来源未知，需从源码仓库重新同步；它不代表自动更新到最新版本。
+
 若要让已有的 dws 聊天技能自动使用此流程，可为它安装路由（首次修改会备份）：
 
 ```text
@@ -65,7 +69,7 @@ python scripts/install_routes.py --skill-file <聊天技能的SKILL.md路径>
 
 ## 验证与技术文档
 
-已通过 160 项离线测试，并用真实单聊、群聊快照验证；其中 11 条独立样本与客户端正文逐字节一致。详细范围、未解决项及历史验证记录见 [验证说明](references/automation.md#目前的验证结论2026-10-18)。
+已用真实单聊、群聊快照验证；其中 11 条独立样本与客户端正文逐字节一致。离线测试覆盖分页、解密、缓存、依赖缺失诊断和部署来源核验，详细范围、未解决项及历史验证记录见 [验证说明](references/automation.md#目前的验证结论2026-10-18)。
 
 ```text
 python -m unittest discover -s tests -v
