@@ -359,6 +359,12 @@ def fetch_snapshot(out_dir, start, end, conversation_ids=None, kind="all",
                     continue
                 record = dict(message)
                 record.setdefault("conversationId", cid)
+                # Carry discovery labels into the portable snapshot so an
+                # offline replay does not lose names and direct/group context.
+                if not record.get('conversationTitle') and isinstance(conv.get('name'),str) and conv['name']:
+                    record['conversationTitle'] = conv['name']
+                if 'singleChat' not in record and conv.get('type') in ('direct','group'):
+                    record['singleChat'] = conv['type'] == 'direct'
                 key = (cid, mid)
                 if key in unique:
                     duplicate_count += 1
