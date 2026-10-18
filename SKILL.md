@@ -1,177 +1,48 @@
 ---
 name: dingtalk-message-decrypt
-description: 读取钉钉单聊/群聊消息并解密「三方加密」密文。当用户要求整理钉钉聊天记录、拉取钉钉消息、做钉钉待办/周报/纪要，或遇到 "[加密消息，无法解码]" 占位符时使用。适用于 dws CLI 环境。
+description: 批量读取、整理钉钉单聊/群聊记录，处理加密占位符与三方密文。用确定性脚本分页、解密、缓存及可选的 Windows 已加载正文补充，明确保留未解决内容。适用于 dws CLI 的待办、周报、纪要和决策追溯。
 ---
 
-# 钉钉消息读取与三方密文解密
+# 钉钉消息批量读取
 
-## 何时用
+先用脚本完成读取和解析，再让模型处理可读语料。不要逐条调用模型解密，也不要把加密占位符当正文总结。
 
-- 用户要整理/分析钉钉聊天记录（待办、周报、会议纪要、决策追溯）
-- 拉取到的消息里出现 `[加密消息，无法解码]`
-- 需要还原单聊 / 群聊消息明文
+## 直接执行
 
-## 核心事实（先记住，能省 30 分钟排查）
+以下 `<skill>` 指本 SKILL.md 所在目录。使用当前已认证 dws 账号；不要擅自切账号。为账号/任务使用独立输出目录和 `--scope` 标签。
 
-企业开启钉钉「三方加密」后：
+已有底层 API JSON/JSONL：
 
-| 现象 | 原因 |
-|---|---|
-| 高层命令 `+chat-messages` / `+at-me` 把读不到的消息换成占位符 | 列表接口内置解密被服务端策略禁用：`reason=policy_disabled`、`decryptAllowedCount=0` |
-| **单聊和群聊的正文都会加密** | 三方加密覆盖点对点正文，**也覆盖群聊正文**（旧结论「群聊正文 100% 明文」来自单日样本，被 3 个月全量实测推翻：18,692 条群正文是密文） |
-| 「被引用原文」100% 加密 | 引用内容作为消息体（密文）返回，字段在 `quotedMessage.content` |
-| 机器人推送、日程卡片、图片 mediaId、审批 100% 可读 | 走服务端结构化通道，不进聊天正文加密 |
-| 越近期加密率越高 | 安全策略在灰度放量 |
-
-**关键结论：策略禁用的是「列表接口自动解密」，不代表解不开。手动调 `crypto decrypt` 可以解。**
-实测（2026-10-09，近 92 天全量）：172,819 条消息 / 39,351 条密文 / **还原率 100.0000%**。
-
-> ⚠️ **时效警告（2026-10-16 起）**：上面这个 100% 依赖**服务端 DING 层解密策略处于开启状态**。
-> 该策略现已被企业侧关闭（`full` 层报 `CRYPTO_DISABLED`），解密能力**当前为 0**。
-> 动手前先跑下面的自检；报 `CRYPTO_DISABLED` 就直接告知用户「需管理员开通」，不要反复重试。
-
-> 口径：**可读 = 原始明文 + 解密成功明文**。表中加密率是**解密前**分布，100% 是**解密后**可读率，两者不矛盾。
-
-## 环境自检（第一步就跑，10 秒出结论）
-
-```bash
-dws chat crypto decrypt --layer full --file <一条密文> -f raw
+```text
+python <skill>/scripts/dws_decrypt.py --input <原始文件> --out <结果目录> --scope <账号标签>
 ```
 
-| 输出 | 含义 | 动作 |
-|---|---|---|
-| 可读中文 | 环境正常 | 正常跑批 |
-| `CRYPTO_DISABLED / crypto disabled by switch` | **企业侧关闭了服务端 DING 解密策略** | 无解，告诉用户找管理员开通，**停止重试** |
-| `1_1_<hex>` | 同上（本地层已跑，服务端层没跑） | 同上 |
-| `missing \|\|separators` | 传入的不是密文原文 | 检查取密文的步骤 |
+读取已明确的会话和时间窗（CID 必须来自真实返回）：
 
-## 前置条件（硬性）
-
-```
-dws version          # 必须 >= v1.0.63
-dws upgrade          # v1.0.62 的 safechat 本地层会 cgo 崩溃（stack overflow）
+```text
+python <skill>/scripts/dws_decrypt.py --conversation-id <cid> --start "2026-10-01 00:00:00" --end "2026-10-15 23:59:59" --out <结果目录> --scope <账号标签>
 ```
 
-v1.0.62 上 `crypto decrypt --layer safechat|full` 会直接崩溃，`--layer ding` 返回 `not_encrypted`。
-**升级是解锁解密能力的必要条件。**（v1.0.64 已实测，解密行为与 v1.0.63 完全相同，别指望升级解决策略问题。）
+跨会话批量读取可用 `--days 92 --kind all`；保持用户指定的时间和会话范围。恢复分页用同一 `--out`、`--scope` 加 `--resume`，不再指定 `--days`。
 
-## 工作流
+已确认 `CRYPTO_DISABLED` 时，首次加 `--known-policy-disabled` 记录该事实，后续相同输出目录自动停止重试。纯离线处理加 `--server off --client off`。只有策略确实恢复才用 `--server retry`。
 
-### 1. 拿会话清单（要续游标）
+先读 `summary.json`；再按任务读取 `messages.jsonl`。退出码 2 表示保留了部分可用结果，不是脚本崩溃。引用、冲突、剩余密文见 `unresolved.jsonl`；原始记录保留于 `resolved.jsonl`。
 
-```bash
-dws chat +recent-conversations --start "2026-07-07 00:00:00" --end "2026-10-08 00:00:00" \
-  --limit 100 --page-limit 500 --page-delay 100 --total-timeout 480 --format json
-# 若 meta.pagination.endpoint_exhausted == false，必须带 --cursor <next_token> 续拉
-```
+## 必须保留的判断
 
-**坑：这个接口单轮经常跑不完**（中途分页超时，`endpoint_exhausted=false`）。直接采信单轮结果会得到残缺清单——实测 302 个 vs 补全后 344 个，少 42 个会话。
+- 单聊和群聊正文都可能加密。高层 `+chat-messages` / `+at-me` 可能只给占位符；需要底层 `chat message list` 的 `content`。脚本负责分页，不传 `--max-items`，不要再绕回 `list-all` / `+search-msg` 来恢复密文。
+- 服务端用 `full`，要求 dws >=1.0.63，`--file` 必须是相对文件名（脚本设置 cwd）。`safechat` 中间结果 `1_1_<hex>` 不是明文；脚本的本地后端会继续完成 DING 层，不能单独将中间结果交给模型。不要试 `ding`、清空密钥缓存或升级来修复服务端策略关闭。
+- `CRYPTO_DISABLED` 只停止服务端重试，不阻断已验证的本地后端。默认 `--client auto --local-crypto auto` 按消息企业/版本，从已登录且版本匹配的 Windows 客户端定向读取缓存 key，在内存中解包并完成 AES-CBC。key不落盘；不滚屏、不调用目标函数或写进程。另需 `pefile` 和 PyCryptodome。
+- 消息有 `oid` 时优先映射，显式 `corpId` 必须一致；缺失时可查精确 CID 的群会话 `corpId`。单聊等缺企业字段时，脚本会一次扫描本批目标的原生会话对象，只有完整扫描、双读稳定、全部候选和两种组织选择分支一致时才采用组织归属。记录来源与时点，不猜当前登录主企业或遍历其他企业key试解。缺身份、缺企业/版本key或未知客户端版本均保留未解决；当前会话元数据不能独立证明全部历史的企业归属稳定。
+- `--local-crypto off` 关闭密钥后端，保留已加载正文补充；`--client off` 同时关闭两者。纯离线处理仍用 `--server off --client off`。只有本地解密失败且仍有正文密文时才扫描已加载消息。
+- `client_observed` 是客户端观察，不是独立密码学解密；无确切 API 身份的正文保存在单独补充文件，不按时间猜配。没有驻留消息时可得到 0，继续交付已有结果并如实列出缺口。
+- 可读数、服务端解密数、客户端补充数、分页完整性分别报告。旧“100% 解密”结论混入过中间信封，不能沿用。
 
-### 2. 拿密文（手动分页，别用 `--max-items`）
+参数语义、恢复/缓存隔离、输出字段与当前验证边界见 [automation.md](references/automation.md)。
 
-必须用底层命令，它会返回 `content` 字段（密文原文，形如 `xxxx...||2||1||228`）：
+## 维护
 
-```bash
-dws chat message list --conversation-id <cid> \
-  --time "2026-07-07 00:00:00" --direction newer \
-  --limit 100 --format json --timeout 45
-```
+源码在独立技能 Git 仓库。改源码后运行仓库的 `sync_to_agents.sh`，同步到 `~/.agents/skills/dingtalk-message-decrypt`，其余宿主通过符号链接跟随。
 
-- `--conversation-id` 对单聊和群聊通用
-- **`--time` 给的是下界**，`--direction newer` 往上翻 —— 天然落在时间窗内，不会一路退回几年前
-- **不要传 `--max-items`**：任何非零值都会截断（600 曾让 10 个会话缺一个半月）。要完整就手动翻页
-- **翻页游标取 `nextPage['time']`**。`nextPage` 是个 dict（还有 `nextCursor`），把整个 dict 当 `--time` 传会返回 0 条
-- 终止条件：`hasMore=false`，或整页 `createTime` 最小时间已超过窗口上界
-
-### 3. 逐条解密
-
-```bash
-dws chat crypto decrypt --file <密文文件> --layer full --format json
-# 成功返回: {"ok":true,"layer":"full","plaintext":"可读明文"}
-```
-
-- `--layer full` = 本地 SafeChat + **服务端 DING 层**。**只有它能对双层消息拿到明文，作主层**
-- `--layer safechat` = 纯本地层。对双层消息只会返回 `1_1_<hex>` **信封，永远不是明文**，只作降级
-- `--layer ding` = 单独调服务端批量解密接口，**实测 30/30 全失败，不要用**
-
-**⚠️ 必须识别 `1_1_<hex>` 信封并判为失败**（旧版没识别，把信封当明文写进了语料）：
-形如 `^\d+_\d+_[0-9a-f]+$`，长度恒等于原密文 `||2||1||N` 的 N。
-出现信封 = 服务端 DING 层没跑成，几乎总是策略关闭。
-
-**已排除的因素（2026-10-16 实测，别重复耗时）**：
-
-| 尝试 | 结果 |
-|---|---|
-| 升级 dws v1.0.63 → v1.0.64 | 输出**逐字节相同**，v1.0.64 release notes 无解密相关修复 |
-| 清空 `~/.dws/safechat/keystore` 强制重拉企业密钥 | 输出**逐字节相同**，不是密钥过期 |
-| 重新登录 / 换账号 | token 正常（有效期至 11-15），与账号权限无关 |
-| 把 `1_1_<hex>` 再喂给 decrypt | 报 `missing \|\|separators`，格式不被接受 |
-
-**坑（最高频）：`--file` 必须是相对路径。** 传绝对路径会被 dws 直接拒绝
-（`--file must be a relative path within the current directory`），表现为整批 0 成功。
-正确写法：把密文写进临时目录，然后 `subprocess.run(..., cwd=tmp_dir)` 且只传文件名。
-
-### 4. 批量
-
-不支持批量输入（多行/JSON 数组都无效），必须逐条调用。
-用技能自带的 `dws_decrypt.py` 一键完成「会话清单 → 分页拉取 → 提取密文 → 解密 → 合并」：
-
-```bash
-# ~/.claude 可换成 ~/.codex 或 ~/.workbuddy —— 三者是同一份文件的符号链接
-python ~/.claude/skills/dingtalk-message-decrypt/scripts/dws_decrypt.py --days 92 --out ./out --kind all
-python ~/.claude/skills/dingtalk-message-decrypt/scripts/dws_decrypt.py --days 92 --out ./out --limit 200  # 试跑
-```
-
-**务必用绝对路径**：技能是通过符号链接加载的，agent 的工作目录不固定，
-写相对路径 `scripts/dws_decrypt.py` 会找不到脚本。
-
-脚本已内置的关键优化：
-- 按**密文字符串去重**（同一条被多处引用只解一次，实测省 6,355 次请求）
-- 「被引用原文」优先用 `quotedMessage.openMessageId` 查表（原文常就在已拉明文里），查不到才解密
-- 页级追加写 + 状态文件，随时中断可续跑
-
-## 性能与坑
-
-| 项 | 实测 |
-|---|---|
-| 单条解密耗时 | 约 0.2s（进程启动开销为主） |
-| 吞吐 | `safechat` 6.61 QPS @并发16；`full` 4.16 QPS。并发 16→32 **无提升**（服务端限速） |
-| 长密文更慢 | 群聊/引用类长密文实测降到 3.9~5.5 条/秒 |
-| 拉取 | 176 个群 / 146,915 条 = 17 分钟（并发 8） |
-| 2.3 万条密文 | 约 80 分钟，务必后台跑 |
-| 成功率 | 100%（3 个月全量 39,351 条密文零遗留）——**该数字以服务端 DING 策略开启为前提** |
-
-**坑 5：`+recent-conversations` 对近 7 天窗口可能返回 0 个会话**
-2026-10-16 实测：7 天窗口 `+0 exhausted=true`（空），30 天窗口返回 318 个。
-→ 窗口别开太小；返回 0 时先用 30 天窗口验证接口本身没坏。
-
-**坑 1：临时文件删除会触发 safe-delete 守卫**
-多线程里 `os.remove()` 删临时文件会报 `[safe-delete][SAFE_DELETE_BULK_GUARD_ERROR] state lock timeout` 并让整个进程崩掉。
-→ 临时文件放独立目录、按槽位编号命名、**不要逐个删除**，最后统一清理。
-
-**坑 2：`--max-items` 会截断**
-早期脚本常用 120/600 上限，导致高频会话被截（实测 10 个单聊缺 07-07~08-24 整段）。
-→ 不传该参数，用 `--direction newer` + 手动翻页。
-
-**坑 3：升级 dws 会中断正在跑的任务**
-升级会替换 dws.exe，正在跑的拉取/解密脚本会失败。升级放在跑批之前。
-
-**坑 4：`--direction older` 只有上界**
-会一路退回几年前（实测拉到 2024-10），白白多拉几万条。要时间窗就用 `newer` + 下界。
-
-## 走不通的路（别浪费时间）
-
-- `dws chat +search-msg`：服务端搜索索引不覆盖单聊，返回 0 条
-- `dws chat message list-all`：只返回本来就能读的消息，加密消息一条都不出现
-- `dws chat +chat-list --page-all`：首页就 `pagination_error`，且返回的是 `openConversationId`（不是 `conversationId`），无法直接喂给 `message list`
-- `dws chat chmod`：scope 白名单只有 `chat.message:send` / `chat.message:list` / `chat.group:destroy` / `chat.data:cross-org`，**没有 decrypt scope**
-- `dws config`：32 个配置项里没有任何解密相关开关
-- 本地钉钉数据库（`~/AppData/Roaming/DingTalk/<uid>_v2/DBFiles/dingtalk.db`）：文件头是自定义加密格式，非 SQLite 明文
-- `dws aisearch enterprise --types im` 走服务端索引，**覆盖率仅约 8%**，只能补充不能替代
-
-## 输出
-
-工具产出 `out/messages.jsonl`（每行 `{session, time, sender, text}`），
-后续做待办提炼时按 `sender != 本人` 过滤，再剔除群发文本（同一文本出现在 ≥4 个会话）。
-
-**统计口径**：可读消息 = 原始明文 + 解密成功明文；关键词/信号筛选只是下游分析，**不会增加能读到的消息**（只会减少）；对外数字按「原始拉取 + 实际解密结果」统计，并按**唯一 messageId 去重**（同一条既是群正文又被引用时只计一次）。
+未来 agent 自动路由由调用方的 dws/chat 技能触发，可用 `scripts/install_routes.py --skill-file <聊天技能的SKILL.md>` 安装可逆路由。它只改指定文件中的标记块，先备份；上游重装覆盖该块后可重跑。不劫持 dws 命令或改其他能力路由。

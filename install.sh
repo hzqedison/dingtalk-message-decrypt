@@ -39,10 +39,9 @@ mkdir -p "$DST/scripts/legacy"
 while IFS= read -r f; do
   mkdir -p "$DST/$(dirname "$f")"
   cp -f "$SRC/$f" "$DST/$f"
-done < <(cd "$SRC" && find . -type f \
-          ! -path "./.git/*" \
-          ! -name "install.sh" \
-          ! -name "sync_to_agents.sh" | sed 's|^\./||')
+done < <(cd "$SRC" && find SKILL.md README.md LICENSE scripts references -type f \
+          \( -name '*.py' -o -name '*.md' -o -name LICENSE \) \
+          ! -path '*/__pycache__/*' ! -path 'scripts/legacy/*')
 echo "  已复制 $(find "$DST" -type f | wc -l | tr -d ' ') 个文件"
 
 # ---------- 2. 三处建链接 ----------
