@@ -182,6 +182,39 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(len(runner.calls), 4)
         self.assertEqual(runner.calls[2][-1], "b")
 
+    def test_normal_success_envelope_discovers_messages_not_false_empty_complete(self):
+        response = {"ok":True, "outcome":"success", "data":{"complete":True,
+            "conversations":[{"conversationId":"c1","type":"group","name":"fixture group"}], "count":1},
+            "meta":{"pagination":{"endpoint_exhausted":True}}}
+        data, report, runner = self.run_fetch([response,page([message()])],conversation_ids=None)
+        self.assertTrue(report['complete'])
+        self.assertEqual(report['conversation_count'],1)
+        self.assertEqual(len(data['messages']),1)
+        self.assertEqual(len(runner.calls),2)
+
+    def test_unknown_success_shape_is_not_zero_complete(self):
+        response = {"ok":True,"data":{"count":1},"meta":{"pagination":{"endpoint_exhausted":True}}}
+        _, report, _ = self.run_fetch([response],conversation_ids=None)
+        self.assertFalse(report['complete'])
+        self.assertEqual(report['errors'][0]['reason'],'invalid_response_shape')
+
+    def test_explicit_incomplete_discovery_overrules_exhausted_metadata(self):
+        response = {"data":{"complete":False,"conversations":[]},
+                    "meta":{"pagination":{"endpoint_exhausted":True}}}
+        _, report, _ = self.run_fetch([response],conversation_ids=None)
+        self.assertFalse(report['complete'])
+
+    def test_normal_success_pages_continue_and_preserve_kind_filter(self):
+        first = {"data":{"complete":False,"conversations":[{"conversationId":"direct1","type":"direct"}]},
+                 "meta":{"pagination":{"endpoint_exhausted":False,"next_token":"next"}}}
+        second = {"data":{"complete":True,"conversations":[{"conversationId":"c1","type":"group"}]},
+                  "meta":{"pagination":{"endpoint_exhausted":True}}}
+        data, report, runner = self.run_fetch([first,second,page([message()])],conversation_ids=None,kind='group')
+        self.assertTrue(report['complete'])
+        self.assertEqual(report['conversation_count'],1)
+        self.assertEqual(len(data['messages']),1)
+        self.assertEqual(len(runner.calls),3)
+
     def test_discovery_stall_partial(self):
         response = {"data": {"succeeded": []}, "meta": {"pagination": {"endpoint_exhausted": False}}}
         _, report, _ = self.run_fetch([response], conversation_ids=None)
