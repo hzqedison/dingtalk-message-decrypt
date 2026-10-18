@@ -27,6 +27,8 @@ python <skill>/scripts/dws_decrypt.py --conversation-id <cid> --start "2026-10-0
 
 跨会话批量读取可用 `--days 92 --kind all`；保持用户指定的时间和会话范围。恢复分页用同一 `--out`、`--scope` 加 `--resume`，不再指定 `--days`。
 
+每次新建输出目录的持续采集，应传 `--read-policy-store <账号私有目录>/read-policy.sqlite3`，并使用经认证核验的账号 scope；它跨批次记住明确的保密群读取限制，直接跳过相关正文请求，保留 partial 和缺口说明。不同账号使用不同文件；不要清除记录来重试已知被禁止的路径。
+
 已确认 `CRYPTO_DISABLED` 时，首次加 `--known-policy-disabled` 记录该事实，后续相同输出目录自动停止重试。纯离线处理加 `--server off --client off`。只有策略确实恢复才用 `--server retry`。
 
 先读 `summary.json`；再按任务读取 `messages.jsonl`。退出码 2 表示保留了部分可用结果，不是脚本崩溃。引用、冲突、剩余密文见 `unresolved.jsonl`；原始记录保留于 `resolved.jsonl`。

@@ -1,11 +1,12 @@
 """One-shot batch entrypoint with resumable fetch and optional resident client read."""
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from datetime import datetime, timedelta
 import argparse
 import json
 import os
 from pathlib import Path
 import sys
+import sqlite3
 
 from message_pipeline import Cache, load_inputs, resolve_batch, run_cli
 from dws_fetch import fetch_snapshot
@@ -56,6 +57,7 @@ def parser():
     p.add_argument('--days', type=int)
     p.add_argument('--kind', choices=['all', 'direct', 'group'])
     p.add_argument('--resume', action='store_true')
+    p.add_argument('--read-policy-store', help='Shared SQLite denial store for this verified account scope; prevents new batches from retrying restricted conversations')
     return p
 
 
@@ -83,11 +85,18 @@ def execute(args):
         raise ValueError('--days cannot be combined with --start or --resume')
     if args.input and (args.conversation_id or args.start or args.end or args.days or args.kind or args.resume):
         raise ValueError('Input snapshots cannot be combined with fetch/window/resume arguments')
+    policy_path = getattr(args, 'read_policy_store', None)
+    if policy_path and (args.input or args.scope == 'output-local'):
+        raise ValueError('Shared read policy requires live fetching and an explicit verified account scope')
     for path in args.input:
         resolved = Path(path).resolve()
         if resolved == root or resolved in root.parents or root in resolved.parents:
             raise ValueError('Keep input snapshots and the output directory separate')
-    with output_lock(root):
+    with output_lock(root), ExitStack() as resources:
+        policy_store = None
+        if policy_path:
+            from read_policy import ReadPolicyStore
+            policy_store = resources.enter_context(ReadPolicyStore(policy_path, args.scope))
         manifest = root / 'scope.json'
         if manifest.exists():
             if json.loads(manifest.read_text(encoding='utf-8')).get('scope') != args.scope:
@@ -105,7 +114,8 @@ def execute(args):
                 if not start:
                     start = (datetime.fromisoformat(end) - timedelta(days=args.days or 7)).isoformat(timespec='seconds')
             snapshot, fetch = fetch_snapshot(root / 'fetch', start, end,
-                conversation_ids=args.conversation_id, kind=kind or 'all', resume=args.resume)
+                conversation_ids=args.conversation_id, kind=kind or 'all', resume=args.resume,
+                policy_store=policy_store)
             inputs = [snapshot]
         else:
             load_inputs(inputs)
@@ -152,7 +162,7 @@ def main(argv=None):
     args = parser().parse_args(argv)
     try:
         report = execute(args)
-    except (OSError, ValueError, RuntimeError) as error:
+    except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
         print(json.dumps({'status': 'error', 'error_type': type(error).__name__,
                           'hint': 'Check paths, scope, argument combinations and whether the output is already in use.'}))
         return 1
