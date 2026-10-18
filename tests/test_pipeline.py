@@ -126,6 +126,59 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(row["resolution"]["body"]["text"], "reply fixture")
         self.assertEqual(row["resolution"]["quoted_message"]["text"], "original fixture")
 
+    def empty_reference_rows(self, **changes):
+        original = message('source',content='source fixture',senderOpenDingTalkId='fixture-sender-id')
+        quote = {'openConversationId':'c1','openMessageId':'source','content':'',
+                 'createTime':original['createTime'],'sender':original['sender'],
+                 'senderOpenDingTalkId':'fixture-sender-id',**changes}
+        return [original,message('reply',content='reply fixture',quotedMessage=quote)]
+
+    def test_empty_quote_uses_exact_independent_message_without_changing_parent(self):
+        report, _, resolved, _, runner = self.run_batch(self.empty_reference_rows(),server='off')
+        quote = resolved[1]['resolution']['quoted_message']
+        self.assertEqual(quote['text'],'source fixture')
+        self.assertEqual(quote['resolved_via'],'exact_message_reference')
+        self.assertEqual(quote['reference_binding']['text_sha256'],p.sha('source fixture'))
+        self.assertEqual(resolved[1]['resolution']['body']['text'],'reply fixture')
+        self.assertEqual(resolved[1]['original']['quotedMessage']['content'],'')
+        self.assertEqual(report['counts']['quote_reference_recovered'],1)
+        self.assertEqual(runner.calls,[])
+
+    def test_empty_reference_rejects_timestamp_sender_and_enterprise_conflicts(self):
+        for changes in ({'createTime':'2026-10-14 13:00:00'},
+                        {'senderOpenDingTalkId':'another'}, {'senderOpenDingTalkId':None},
+                        {'sender':'another name'}, {'corpId':'unproven-corp'},
+                        {'messageId':'another-id'}, {'recalled':True}):
+            with self.subTest(changes=changes):
+                report, _, resolved, _, runner = self.run_batch(self.empty_reference_rows(**changes),server='off')
+                self.assertEqual(resolved[1]['resolution']['quoted_message']['status'],'unresolved')
+                self.assertEqual(report['counts'].get('quote_reference_recovered',0),0)
+                self.assertEqual(runner.calls,[])
+
+    def test_empty_reference_cannot_infer_conversation_from_parent(self):
+        rows=self.empty_reference_rows()
+        rows[1]['quotedMessage'].pop('openConversationId')
+        _, _, resolved, _, _ = self.run_batch(rows,server='off')
+        self.assertEqual(resolved[1]['resolution']['quoted_message']['status'],'unresolved')
+
+    def test_conflicting_target_variants_cannot_fill_empty_quote(self):
+        rows=self.empty_reference_rows()
+        rows.append({**rows[0],'content':'conflicting source fixture'})
+        report, _, resolved, _, _ = self.run_batch(rows,server='off')
+        self.assertEqual(report['counts']['conflicting_messages'],1)
+        self.assertEqual(resolved[0]['resolution']['quoted_message']['status'],'unresolved')
+
+    def test_empty_reference_preserves_decryption_provenance_without_extra_call(self):
+        rows=self.empty_reference_rows()
+        rows[0]['content']=cipher()
+        report, _, resolved, _, runner = self.run_batch(rows,[{'ok':True,'plaintext':'source fixture'}])
+        quote=resolved[1]['resolution']['quoted_message']
+        self.assertEqual(quote['status'],'decrypted_full')
+        self.assertTrue(quote['crypto_decryption_proven'])
+        self.assertTrue(quote['reference_reused'])
+        self.assertEqual(report['decrypt_calls'],1)
+        self.assertEqual(len(runner.decrypt_calls),1)
+
     def test_body_cached_still_processes_quote(self):
         self.run_batch([message()], [{"ok": True, "plaintext": "body fixture"}])
         row = message(quotedMessage={"openMessageId": "quote-id", "content": cipher("another")})

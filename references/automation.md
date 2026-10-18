@@ -33,6 +33,8 @@
 空内容或非文本结构保留在原始记录中，不虚构正文。`unresolved_items` 按字段统计，不能当作未读消息条数。
 同 ID 不同正文/时间/引用/发送者/显式企业身份版本拒绝自动覆盖；同 CID、同密文且显式企业身份一致的确定解密结果可以回填多个 ID，但客户端观察仅匹配确切 ID。引用自身的显式身份与对应正文冲突时拒绝复用，也不能用父消息企业替代引用企业。
 
+引用 `content` 为空时，如果同批输入包含它指向的独立原消息，可按显式 CID＋MID、完全一致的创建时间、稳定发送者 ID、无冲突企业字段严格回填；缺身份、目标有冲突、已撤回或目标正文未解决时仍保留未解决。不从父消息推断缺失的引用 CID，也不凭时间或相似文本猜配。原始空引用不改写，结果记录 `resolved_via=exact_message_reference` 和 `reference_binding`；`quote_reference_recovered` 是原消息正文复用数，不是新增密码学解密次数。当前输入没有目标消息时不会自动扩大读取范围；经授权精确取得目标记录后可作为额外输入再解析。
+
 本地缓存使用独立的 `resolved_identity` 表，保留企业、key 版本、算法类型、身份依据、客户端版本摘要和原始来源。后端提供的 `identity_evidence` 也原样保留，包括证据时点和历史归属稳定性限制。命中后 `source=decrypted_local_cache`、`source_resolution_status=decrypted_local`；`cache_hit=true` 表示本轮未重新执行密码运算。`messages.jsonl` 和 `resolved.jsonl` 都保留这些来源字段。此处只缓存正文与非秘密元数据，不保存 key。
 
 旧 `resolved` 表继续支持无显式身份的 full 缓存；输入出现显式 oid/corpId 时不会使用旧身份不明条目。升级时，同一 scope 的旧 `resolved.jsonl` 正文记录可补回本地来源，但须与当前输入 CID、MID、完整密文、显式身份及保存的密文哈希匹配，并与旧缓存正文完全一致；来源或正文冲突不迁移。只有旧 `decrypted_cache` 标记而没有本地来源记录时，不能倒推出企业或解密来源。迁移条数见 `summary.migrated_local_cache_entries`。复制工作区验证时保留 `scope.json`、`resolution_manifest.json`、`resolution_cache.sqlite3` 和 `resolved.jsonl`，输入原始快照须位于输出目录之外。
