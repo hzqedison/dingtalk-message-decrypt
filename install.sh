@@ -43,6 +43,7 @@ done < <(cd "$SRC" && find SKILL.md README.md LICENSE scripts references -type f
           \( -name '*.py' -o -name '*.md' -o -name LICENSE \) \
           ! -path '*/__pycache__/*' ! -path 'scripts/legacy/*')
 echo "  已复制 $(find "$DST" -type f | wc -l | tr -d ' ') 个文件"
+python "$SRC/scripts/deployment_info.py" --source "$SRC" --destination "$DST" || exit 1
 
 # ---------- 2. 三处建链接 ----------
 echo

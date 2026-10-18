@@ -31,6 +31,8 @@ python <skill>/scripts/dws_decrypt.py --conversation-id <cid> --start "2026-10-0
 
 先读 `summary.json`；再按任务读取 `messages.jsonl`。退出码 2 表示保留了部分可用结果，不是脚本崩溃。引用、冲突、剩余密文见 `unresolved.jsonl`；原始记录保留于 `resolved.jsonl`。
 
+跨设备失败先检查 `local_crypto.dependencies` 和 `python_executable`：`local_dependency_unavailable` 表示依赖不可用，按报告的 `install_command` 在同一解释器环境修复后重跑。`Crypto` 对应 `pycryptodome`；`cached_key_count=0` 不能证明客户端缺密钥。详细字段和来源核验见 [跨设备排查](references/automation.md#跨设备排查)。
+
 ## 必须保留的判断
 
 - 单聊和群聊正文都可能加密。高层 `+chat-messages` / `+at-me` 可能只给占位符；需要底层 `chat message list` 的 `content`。脚本负责分页，不传 `--max-items`，不要再绕回 `list-all` / `+search-msg` 来恢复密文。

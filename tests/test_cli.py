@@ -30,6 +30,26 @@ class CliTests(unittest.TestCase):
             report = execute(self.args())
         self.assertEqual(report['counts']['readable_messages'], 1)
 
+    def test_missing_crypto_preserves_plaintext_without_client_scan_or_external_calls(self):
+        self.input.write_text(json.dumps({'messages':[
+            {'conversationId':'cid-a','messageId':'plain','content':'hello'},
+            {'conversationId':'cid-a','messageId':'encrypted','content':'Y2lwaGVy||2||1||128'}]}),encoding='utf-8')
+        def importer(name):
+            if name == 'Crypto.Cipher.AES':
+                raise ImportError('fixture private error')
+            return object()
+        with patch('client_bridge.discover_client',side_effect=AssertionError('Unexpected client discovery')), \
+                patch('client_bridge.capture_loaded',side_effect=AssertionError('Unexpected scan')), \
+                patch('subprocess.run',side_effect=AssertionError('Unexpected external call')), \
+                patch('native_decryptor.importlib.import_module',side_effect=importer):
+            report=execute(self.args('--client','auto'))
+        self.assertEqual(report['counts']['readable_messages'],1)
+        self.assertEqual(report['local_crypto']['stop_reason'],'local_dependency_unavailable')
+        self.assertEqual(report['client']['reason'],'local_dependency_unavailable')
+        unresolved=json.loads((self.out/'unresolved.jsonl').read_text(encoding='utf-8').strip())
+        self.assertEqual(unresolved['local_reason'],'local_dependency_unavailable')
+        self.assertNotIn('fixture private error',json.dumps(report))
+
     def test_empty_client_index_does_not_reclassify_this_run_as_cache_hits(self):
         first = {'counts':{'encrypted_body_unresolved':1,'body_decrypted_local':2},
                  'local_crypto':{'safechat_calls':2}, 'status':'partial'}

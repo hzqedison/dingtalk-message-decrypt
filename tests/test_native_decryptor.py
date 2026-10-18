@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from native_decryptor import NativeDecryptor
@@ -80,6 +81,47 @@ class NativeDecryptorTests(unittest.TestCase):
         self.resolver.close();self.tmp.cleanup()
     def call(self,row=None):
         return self.resolver.resolve(row or {},'cid1','msg1',self.cipher)
+    def test_missing_dependencies_stop_before_client_or_network_and_identify_interpreter(self):
+        for missing, package in (('Crypto.Cipher.AES','pycryptodome'),('pefile','pefile')):
+            with self.subTest(missing=missing):
+                resolver=NativeDecryptor(self.root/missing,self.runner,lambda:self.fail('Provider accessed'))
+                def importer(name):
+                    if name == missing:
+                        raise ModuleNotFoundError('secret fixture must not be serialized')
+                    return object()
+                with patch('native_decryptor.importlib.import_module',side_effect=importer) as imports:
+                    for _ in range(2):
+                        result=resolver.resolve({},'cid1','m',self.cipher)
+                        self.assertEqual(result['reason'],'local_dependency_unavailable')
+                    self.assertEqual(imports.call_count,2)
+                report=resolver.summary()
+                self.assertEqual(report['python_executable'],sys.executable)
+                self.assertEqual(report['dependencies'][missing]['install_command'],
+                                 [sys.executable,'-m','pip','install',package])
+                self.assertEqual(report['safechat_calls'],0)
+                self.assertIsNone(report['key_provider'])
+                self.assertNotIn('secret fixture',json.dumps(report))
+                self.assertEqual(self.runner.calls,[])
+    def test_key_failure_is_distinct_from_body_failure_without_exception_text(self):
+        with patch.object(self.provider,'get_key_for_enterprise',side_effect=ValueError('secret fixture')):
+            result=self.call({'oid':7})
+        self.assertEqual(result['failure_stage'],'key_lookup_or_unwrap')
+        self.assertEqual(self.resolver.calls,1)
+        self.assertNotIn('secret fixture',json.dumps(result))
+        with patch('native_decryptor.decrypt_envelope',side_effect=ValueError('secret fixture')):
+            result=self.call({'oid':7})
+        self.assertEqual(result['failure_stage'],'body_decryption_or_validation')
+        self.assertNotIn('secret fixture',json.dumps(result))
+    def test_invalid_envelope_never_selects_key_and_stage_survives_pipeline(self):
+        self.runner.envelope='not an envelope'
+        source=self.root/'invalid-envelope.json'
+        source.write_text(json.dumps([{'conversationId':'cid1','messageId':'m',
+                                      'content':self.cipher,'oid':7}]),encoding='utf-8')
+        out=self.root/'invalid-output'
+        resolve_batch([source],out,server='off',local_decryptor=self.resolver)
+        row=json.loads((out/'unresolved.jsonl').read_text(encoding='utf-8').strip())
+        self.assertEqual(row['local_failure_stage'],'envelope_validation')
+        self.assertEqual(self.provider.selections,[])
     def test_group_metadata_and_decrypt_are_cached_at_correct_scopes(self):
         for _ in range(2):
             result=self.call()

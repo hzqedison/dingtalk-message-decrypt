@@ -420,6 +420,8 @@ def resolve_batch(input_paths, out_dir, scope='output-local', server='auto', cli
                                      'source_resolution_status':'decrypted_local'}
                 else:
                     memo[cache_key]={**memo[cache_key],'local_reason':local.get('reason','invalid_local_result_or_identity')}
+                    if local.get('failure_stage'):
+                        memo[cache_key]['local_failure_stage'] = local['failure_stage']
         return {**memo[cache_key],'cipher_sha256':sha(cipher)}
 
     counts=Counter(input_rows=len(rows),unique_messages=len(unique),duplicate_rows=sum(len(v)-1 for v in grouped.values()),

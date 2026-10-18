@@ -57,6 +57,39 @@
 没有 API 强绑定的正文单独保存 `supplemental_native_messages.jsonl`，不可与 `messages.jsonl` 数量直接相加。
 `--client-index` 仅导入本地受信任的采集索引；哈希用于一致性校验，不是对任意外来文件的真实性认证。离线证据反映采集时状态，不保证后来没有编辑/撤回。
 
+## 跨设备排查
+
+先核对实际技能路径、运行脚本的 Python 解释器、dws 版本、客户端版本/DLL 哈希及当前账号。客户端与 dws 是否为同一账号需独立核验，企业身份匹配不能替代账号核验。不自动切账号。
+
+本地后端在读取客户端和调用 SafeChat 前检查 `Crypto.Cipher.AES` 与 `pefile` 能否导入。失败时 `local_crypto.stop_reason=local_dependency_unavailable`，同批不继续客户端扫描，保留已有明文和缓存结果。`local_crypto.dependencies` 说明失败模块及其 `install_command`，`python_executable` 指向实际运行环境。依赖可用性只在本地后端实际需要执行时检查；纯离线缓存重放无需这些依赖。
+
+`Crypto` 来自 `pycryptodome`，不是 `crypto`；`pycryptodomex` 的模块名是 `Cryptodome`，也不满足当前代码。PowerShell 中使用报告给出的解释器绝对路径，例如：
+
+```powershell
+& '<实际 Python.exe 路径>' -m pip install pycryptodome pefile
+& '<实际 Python.exe 路径>' -c "import sys, pefile, Crypto; from Crypto.Cipher import AES; print(sys.executable); print(Crypto.__version__)"
+```
+
+导入不可用可能是未安装，也可能是安装损坏；报告不输出底层异常正文。修复后用同一原始输入、相同账号 scope 和独立诊断输出目录复测；不清空 keystore，不重试已关闭的 full 策略。依赖修复成功本身不证明消息已解密。
+
+诊断顺序为：依赖 → 客户端/企业身份 → SafeChat → 信封验证 → 密钥读取及解包 → 正文解密及校验。
+
+| 字段或结果 | 能说明什么 |
+| --- | --- |
+| `safechat_calls` | 尝试调用次数，不是成功次数 |
+| `safechat_intermediate_failed` | 外层调用返回失败，尚未成功取得信封 |
+| `key_provider.requests > 0` | 本批至少进入过一次密钥读取请求；多条批次不能归到每一条消息 |
+| `cached_key_count=0` | 当前 provider 没有成功缓存密钥，不能据此推断客户端缺密钥 |
+| `local_failure_stage=enterprise_identity` | 企业身份解析过程中失败 |
+| `local_failure_stage=safechat_input` / `safechat_call` | 输入准备或外层调用/响应解析过程中失败 |
+| `local_failure_stage=envelope_validation` | 外层返回的内容没有通过信封校验 |
+| `local_failure_stage=key_lookup_or_unwrap` | 密钥读取、稳定性检查或解包阶段失败，尚不能单独认定缺密钥 |
+| `local_failure_stage=body_decryption_or_validation` | 正文解密或文本校验阶段失败 |
+
+阶段字段位于 `unresolved.jsonl` 及 `resolved.jsonl` 的解析结果，不包含密钥、异常原文或额外正文。旧 `local_identity_key_or_payload_validation_failed` 保留兼容，同时增加阶段字段。服务端 `reason` 与本地 `local_reason` 分开解读；`server_disabled_by_argument` 不代表本地失败原因。
+
+部署版本核验：执行 `python <skill>/scripts/deployment_info.py`。安装/同步生成的 `deployment.json` 包含 `source_commit`、`source_dirty` 和文件 SHA-256；脚本检查当前文件是否与记录一致。没有记录时返回 `provenance_unavailable`；源码没有 Git 时提交号和修改状态为 null，不能宣称最新。`source_dirty=true` 表示提交号不足以标识全部部署内容。该记录只用于本地追溯，不是签名，也不会自动查询远端版本。
+
 ## 目前的验证结论（2026-10-18）
 
 已在研究版本验证目标群两段历史，共 30 条未标记撤回的已加载正文；其中 11 条可与原 API 密文强绑定。
