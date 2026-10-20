@@ -40,8 +40,9 @@ python <skill>/scripts/dws_decrypt.py --conversation-id <cid> --start "2026-10-0
 可运行 `python <skill>/scripts/client_doctor.py --dll "<实际 MainFrame.dll 路径>"` 生成无正文、无密钥的离线诊断。
 已知指纹也不代表业务恢复；新版本接入与验收见 [客户端兼容性](references/client-compatibility.md)。
 `261015001` 与 `261018001` 使用各自的布局，按 DLL 指纹自动选择，无需修改日报或支持项目。
-`261018001` 当前标记 `adapter_validation=static_verified_runtime_pending`；
-更新后先用原失败消息 ID 验收，分别报告正文、引用父 ID、原始空字段、附件和策略限制，
+`261018001` 当前标记 `adapter_validation=runtime_batch_reported`：
+已收到 DELL 限定原始批次恢复通过的回执，证据文件尚未同步到维护端复核。
+每个新批次仍须按实际结果验收，分别报告正文、引用父 ID、原始空字段、附件和策略限制，
 不得仅凭已识别客户端或安装成功宣布修复。见 [新版核验记录](references/client-261018001-validation.md)。
 
 ## 必须保留的判断

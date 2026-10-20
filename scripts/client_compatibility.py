@@ -28,7 +28,7 @@ CLIENT_261018001 = ClientProfile(
     '9.0.2.261018001',
     'e535c42ef08e3e32caaab1b7a444420a00a590fe233eb56f4a74d79bca42e641',
     ('ding_key_provider', 'conversation_identity', 'typed_messages'),
-    'static_verified_runtime_pending',
+    'runtime_batch_reported',
 )
 PROFILES = (LEGACY_PROFILE, CLIENT_261018001)
 
