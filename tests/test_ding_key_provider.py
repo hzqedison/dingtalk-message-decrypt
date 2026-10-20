@@ -10,19 +10,21 @@ PATH = Path(__file__).resolve().parents[1] / 'scripts/client_runtime/ding_key_pr
 SPEC = importlib.util.spec_from_file_location('key_provider_under_test', PATH)
 provider = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(provider)
+from client_compatibility import LEGACY_PROFILE, CLIENT_261018001
+from client_layouts import LEGACY_LAYOUT, LAYOUT_261018001
 
 
 class Memory:
     base, service, orgs = 0x180000000, 0x30000, 0x100000
     manager, head, node, records = 0x200000, 0x210000, 0x220000, 0x230000
     other_node, other_records = 0x240000, 0x250000
-    def __init__(self):
+    def __init__(self, layout=LEGACY_LAYOUT):
         self.blocks, self.calls = {}, []
-        self.put(self.base + provider.GETTER_RVA, b'G' * 57)
-        self.put(self.base + provider.ORG_SLOT_RVA, struct.pack('<Q', self.service))
-        self.put(self.base + provider.KEY_SLOT_RVA, struct.pack('<Q', self.manager))
+        self.put(self.base + layout.getter_rva, b'G' * 57)
+        self.put(self.base + layout.org_slot_rva, struct.pack('<Q', self.service))
+        self.put(self.base + layout.key_slot_rva, struct.pack('<Q', self.manager))
         self.put(self.service, bytes(0x2650))
-        self.put(self.service, struct.pack('<Q', self.base + provider.ORG_VTABLE_RVA))
+        self.put(self.service, struct.pack('<Q', self.base + layout.org_vtable_rva))
         self.put(self.service + 0xBB8, b'\1')
         self.put(self.service + 0xBC0, struct.pack('<QQQ', self.orgs, self.orgs + 2*0x1EE8, self.orgs + 2*0x1EE8))
         self.put(self.orgs, bytes(2*0x1EE8))
@@ -190,12 +192,15 @@ class FakeProcess:
 
 
 class ProviderTests(unittest.TestCase):
+    profile, layout = LEGACY_PROFILE, LEGACY_LAYOUT
+
     def setUp(self):
-        self.memory = Memory()
+        self.memory = Memory(self.layout)
         self.proc = FakeProcess(self.memory)
         self.target = {'pid': 123, 'module_base': self.memory.base, 'exe': 'synthetic/DingTalk.exe',
                        'dll': 'synthetic/MainFrame.dll', 'process_created_filetime': 456}
-        self.patches = [patch.object(provider, '_load_binary', return_value=(b'G'*57, b'M'*36)),
+        self.patches = [patch.object(provider, '_load_binary',
+                                    return_value=(b'G'*57, b'M'*36, self.profile, self.layout)),
                         patch.object(provider, '_open_process', return_value=self.proc),
                         patch.object(provider, '_unwrap', return_value=b'K'*32)]
         self.mocks = [p.start() for p in self.patches]
@@ -238,9 +243,10 @@ class ProviderTests(unittest.TestCase):
     def test_constructor_ready_and_cached_key_requires_live_validation(self):
         reader = provider.WindowsDingKeyProvider(self.target)
         try:
-            self.assertEqual(reader.dll_sha256, provider.EXPECTED_SHA)
+            self.assertEqual(reader.dll_sha256, self.profile.dll_sha256)
+            self.assertEqual(reader.metadata['client_profile'], self.profile.id)
             self.assertEqual(reader.get_key_for_enterprise('dingTarget', 7, 2), b'K'*32)
-            self.memory.put(self.memory.base+provider.GETTER_RVA, b'X')
+            self.memory.put(self.memory.base+self.layout.getter_rva, b'X')
             with self.assertRaisesRegex(ValueError, 'Live getter mismatch'):
                 reader.get_key_for_enterprise('dingTarget', 7, 2)
         finally:
@@ -282,11 +288,11 @@ class ProviderTests(unittest.TestCase):
     def test_live_getter_vtable_identity_failures_close_handle(self):
         for kind in ('getter', 'vtable', 'creation'):
             with self.subTest(kind=kind):
-                self.memory = Memory()
+                self.memory = Memory(self.layout)
                 self.proc = FakeProcess(self.memory)
                 self.mocks[1].return_value = self.proc
                 if kind == 'getter':
-                    self.memory.put(self.memory.base+provider.GETTER_RVA, b'X')
+                    self.memory.put(self.memory.base+self.layout.getter_rva, b'X')
                 elif kind == 'vtable':
                     self.memory.put(self.memory.service, struct.pack('<Q', self.memory.base))
                 else:
@@ -314,6 +320,10 @@ class ProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'length mismatch'):
                 reader.get_key(92, 7, 2)
             self.assertEqual(reader.metadata['cached_key_count'], 0)
+
+
+class NewClientProviderTests(ProviderTests):
+    profile, layout = CLIENT_261018001, LAYOUT_261018001
 
 
 if __name__ == '__main__':

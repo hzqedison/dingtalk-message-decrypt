@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 import json
 from pathlib import Path
 import struct
+import sys
 import time
 
 import pefile
@@ -20,15 +21,17 @@ from message_evidence import canonical_cipher, digest, plaintext_ok
 from probe_message_objects import ObjectProbe
 from native_string_map import read_string_map, NativeMapRejected
 
-EXPECTED_SHA = '23bf21eec6a50c69388089e7ddeb22b573439c36f4c9be4c396d719a3f375d77'
-MODEL_VTABLE = 0x6e03df0
-TEXT_VTABLE = 0x6e36328
-PROFILES = {
-    'mj': {'model_vtable': MODEL_VTABLE, 'text_vtable': TEXT_VTABLE, 'text_offset': 0x38,
-           'require_status_one': True},
-    'im_chat': {'model_vtable': 0x81aff00, 'text_vtable': 0x81afd98, 'text_offset': 0x28,
-                'require_status_one': False},
-}
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    from client_compatibility import LEGACY_PROFILE
+    from client_layouts import LEGACY_LAYOUT, select_binary_layout
+finally:
+    sys.path.pop(0)
+
+EXPECTED_SHA = LEGACY_PROFILE.dll_sha256
+MODEL_VTABLE = LEGACY_LAYOUT.mj_model_vtable
+TEXT_VTABLE = LEGACY_LAYOUT.mj_text_vtable
+PROFILES = {kind: LEGACY_LAYOUT.message(kind) for kind in ('mj', 'im_chat')}
 
 
 class Rejected(ValueError):
@@ -63,10 +66,11 @@ def read_string(header, address, read, max_length=32768):
         raise Rejected('invalid_utf8') from error
 
 
-def snapshot(address, read, module_base, target_cids, profile='mj', read_extensions=False, external_cids=None):
+def snapshot(address, read, module_base, target_cids, profile='mj', read_extensions=False, external_cids=None,
+             client_layout=LEGACY_LAYOUT):
     if external_cids is not None and not read_extensions:
         raise Rejected('external_filter_requires_extensions')
-    layout = PROFILES[profile]
+    layout = client_layout.message(profile)
     model = read(address, 0x180)
     if u64(model) != module_base + layout['model_vtable']:
         raise Rejected('model_vtable_mismatch')
@@ -113,9 +117,10 @@ def snapshot(address, read, module_base, target_cids, profile='mj', read_extensi
     return result
 
 
-def stable_snapshot(address, read, module_base, target_cids, profile='mj', read_extensions=False, external_cids=None):
-    first = snapshot(address, read, module_base, target_cids, profile, read_extensions, external_cids)
-    second = snapshot(address, read, module_base, target_cids, profile, read_extensions, external_cids)
+def stable_snapshot(address, read, module_base, target_cids, profile='mj', read_extensions=False, external_cids=None,
+                    client_layout=LEGACY_LAYOUT):
+    first = snapshot(address, read, module_base, target_cids, profile, read_extensions, external_cids, client_layout)
+    second = snapshot(address, read, module_base, target_cids, profile, read_extensions, external_cids, client_layout)
     if first != second:
         raise Rejected('changed_on_reread')
     return first
@@ -136,11 +141,10 @@ def check_api_time(row, api_rows):
 
 
 def run(args):
-    layout = PROFILES[args.profile]
     dll = Path(args.dll)
     binary = dll.read_bytes()
-    if digest(binary) != EXPECTED_SHA:
-        raise ValueError('Unsupported DLL version/hash')
+    client_profile, client_layout = select_binary_layout(binary, 'typed_messages')
+    layout = client_layout.message(args.profile)
     matcher = ObjectProbe(args.api, args.anchors)
     if not matcher.target_cids or (args.profile != 'im_chat' and not matcher.internal_cids):
         raise ValueError('No validated target conversation scope')
@@ -153,7 +157,8 @@ def run(args):
     budget = int(args.max_gib * 1024**3)
     report = {'started_utc': now(), 'pid': args.pid, 'process_path': proc.path,
               'process_created_filetime': proc.created_filetime,
-              'dll_sha256': EXPECTED_SHA, 'module_base': hex(args.module_base),
+              'dll_sha256': client_profile.dll_sha256, 'module_base': hex(args.module_base),
+              'client_profile': client_profile.id, 'adapter_validation': client_profile.validation,
               'model_profile': args.profile,
               'model_vtable_rva': hex(layout['model_vtable']), 'text_vtable_rva': hex(layout['text_vtable']),
               'api_source_sha256': matcher.api_sha256, 'memory_access': 'QUERY_INFORMATION | VM_READ',
@@ -211,7 +216,8 @@ def run(args):
                                 row = stable_snapshot(address, read, args.module_base,
                                                       None if args.profile == 'im_chat' else matcher.internal_cids,
                                                       args.profile, read_extensions=args.profile == 'im_chat',
-                                                      external_cids=matcher.target_cids if args.profile == 'im_chat' else None)
+                                                      external_cids=matcher.target_cids if args.profile == 'im_chat' else None,
+                                                      client_layout=client_layout)
                                 if args.profile == 'im_chat' and row['extension_selected'].get('openConversationId') not in matcher.target_cids:
                                     raise Rejected('external_conversation_mismatch')
                                 row.update(kind='native_typed_message_body', model_address=hex(address),

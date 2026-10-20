@@ -9,6 +9,8 @@ import sys
 import uuid
 
 from message_pipeline import body_of, cipher_of, load_inputs, plaintext, sha
+from client_compatibility import ClientCompatibilityError
+from client_layouts import select_binary_layout
 
 
 def discover_client():
@@ -33,6 +35,14 @@ def capture_loaded(input_paths, out_dir):
     target, error = discover_client()
     if error:
         return {'status':'unavailable','reason':error,'index':None}
+    # Reject an unknown adapter before even the optional resident JSON scan.
+    try:
+        select_binary_layout(Path(target['dll']).read_bytes(), 'typed_messages')
+    except ClientCompatibilityError as error:
+        return {'status':'unavailable','reason':error.reason,'index':None,
+                'client_compatibility':error.diagnostic}
+    except OSError:
+        return {'status':'unavailable','reason':'client_dll_unreadable','index':None}
     rows, _ = load_inputs(input_paths)
     root=Path(out_dir)/('client-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid.uuid4().hex[:8])
     root.mkdir(parents=True,exist_ok=False)

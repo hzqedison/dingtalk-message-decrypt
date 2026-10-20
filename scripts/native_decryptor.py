@@ -11,6 +11,7 @@ import sys
 
 from ding_codec import parse_envelope, decrypt_envelope
 from message_pipeline import plaintext, strict_json, unpack, sha
+from client_compatibility import ClientCompatibilityError
 
 
 class NativeDecryptor:
@@ -31,6 +32,7 @@ class NativeDecryptor:
         self.halted = None
         self.version_checked = False
         self.dependencies = None
+        self.client_compatibility = None
 
     def check_dependencies(self):
         if self.dependencies is None:
@@ -73,6 +75,10 @@ class NativeDecryptor:
                     return False
                 self.version_checked = True
             return True
+        except ClientCompatibilityError as error:
+            self.halted = error.reason
+            self.client_compatibility = error.diagnostic
+            return False
         except (OSError, ValueError, RuntimeError, ImportError):
             self.halted = 'local_key_provider_unavailable'
             return False
@@ -207,6 +213,7 @@ class NativeDecryptor:
         return {'safechat_calls':self.calls,'conversation_metadata_calls':self.metadata_calls,
                 'stop_reason':self.halted,'keys_written_to_disk':False,
                 'python_executable':sys.executable,'dependencies':self.dependencies,
+                'client_compatibility':self.client_compatibility,
                 'conversation_identity_evidence':list(self.conversation_evidence.values()),
                 'key_provider':getattr(self.provider,'metadata',None),
                 'native_conversation_provider':getattr(self.conversation_provider,'summary',None),

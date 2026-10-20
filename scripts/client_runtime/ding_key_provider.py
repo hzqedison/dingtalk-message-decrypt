@@ -12,10 +12,17 @@ import struct
 import sys
 import time
 
-EXPECTED_SHA = '23bf21eec6a50c69388089e7ddeb22b573439c36f4c9be4c396d719a3f375d77'
-GETTER_RVA, KEY_SLOT_RVA = 0x59AAF40, 0x9D70CD8
-ORG_SLOT_RVA, ORG_VTABLE_RVA = 0x9D5F148, 0x82C0E30
-MATERIAL_TABLE_RVA = 0x84EF581
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    from client_compatibility import LEGACY_PROFILE
+    from client_layouts import LEGACY_LAYOUT, select_binary_layout
+finally:
+    sys.path.pop(0)
+
+EXPECTED_SHA = LEGACY_PROFILE.dll_sha256
+GETTER_RVA, KEY_SLOT_RVA = LEGACY_LAYOUT.getter_rva, LEGACY_LAYOUT.key_slot_rva
+ORG_SLOT_RVA, ORG_VTABLE_RVA = LEGACY_LAYOUT.org_slot_rva, LEGACY_LAYOUT.org_vtable_rva
+MATERIAL_TABLE_RVA = LEGACY_LAYOUT.material_table_rva
 ADDRESS_LIMIT = 0x800000000000
 
 
@@ -93,12 +100,12 @@ def _vector(read, address, stride):
     return range(start, end, stride)
 
 
-def resolve_enterprise(read, base, org_id):
+def resolve_enterprise(read, base, org_id, layout=LEGACY_LAYOUT):
     """Read IDs only for other organizations, and names only for exact matches."""
     validate_pointer(base)
     _integer(org_id, 'org_id', 1, 0x7fffffffffffffff)
-    service = validate_pointer(_u64(read, base + ORG_SLOT_RVA))
-    if _u64(read, service) != base + ORG_VTABLE_RVA:
+    service = validate_pointer(_u64(read, base + layout.org_slot_rva))
+    if _u64(read, service) != base + layout.org_vtable_rva:
         raise ValueError('Organization service vtable mismatch')
     matches = []
     for flag, vector, stride, oid, corp, additional in (
@@ -120,12 +127,12 @@ def resolve_enterprise(read, base, org_id):
     return matches[0]
 
 
-def select_wrapped_key(read, base, enterprise, version):
+def select_wrapped_key(read, base, enterprise, version, layout=LEGACY_LAYOUT):
     """Search a bounded tree path; never read another enterprise/version's key."""
     validate_pointer(base)
     _enterprise(enterprise)
     _integer(version, 'version', 0, 0x7fffffff)
-    manager = validate_pointer(_u64(read, base + KEY_SLOT_RVA))
+    manager = validate_pointer(_u64(read, base + layout.key_slot_rva))
     if not _flag(read, manager):
         raise ValueError('Key manager not initialized')
     head, count = struct.unpack('<QQ', _exact(read, manager + 0x98, 16))
@@ -187,7 +194,7 @@ def select_wrapped_key(read, base, enterprise, version):
     raise ValueError('Requested enterprise not cached')
 
 
-def read_target_snapshot(read, base, org_id, version):
+def read_target_snapshot(read, base, org_id, version, layout=LEGACY_LAYOUT):
     """Pure reader. Fingerprint stays internal and includes every read/address."""
     digest = hashlib.sha256()
     def recorded(address, size):
@@ -195,8 +202,8 @@ def read_target_snapshot(read, base, org_id, version):
         digest.update(struct.pack('<QI', address, size))
         digest.update(data)
         return data
-    enterprise = resolve_enterprise(recorded, base, org_id)
-    wrapped = select_wrapped_key(recorded, base, enterprise, version)
+    enterprise = resolve_enterprise(recorded, base, org_id, layout)
+    wrapped = select_wrapped_key(recorded, base, enterprise, version, layout)
     return enterprise, wrapped, digest.digest()
 
 
@@ -213,16 +220,15 @@ def _snapshot(read, operation):
 def _load_binary(path):
     import pefile
     raw = Path(path).read_bytes()
-    if hashlib.sha256(raw).hexdigest() != EXPECTED_SHA:
-        raise ValueError('Unsupported MainFrame.dll hash')
+    profile, layout = select_binary_layout(raw, 'ding_key_provider')
     pe = pefile.PE(data=raw, fast_load=True)
     try:
-        getter = pe.get_data(GETTER_RVA, 57)
-        first = pe.get_data(MATERIAL_TABLE_RVA + 0x4D, 36)
-        second = pe.get_data(MATERIAL_TABLE_RVA + 0x7F, 36)
+        getter = pe.get_data(layout.getter_rva, 57)
+        first = pe.get_data(layout.material_table_rva + 0x4D, 36)
+        second = pe.get_data(layout.material_table_rva + 0x7F, 36)
         if len(getter) != 57 or len(first) != 36 or len(second) != 36:
             raise ValueError('Incomplete verified DLL layout')
-        return getter, bytes(a ^ b for a, b in zip(first, second))
+        return getter, bytes(a ^ b for a, b in zip(first, second)), profile, layout
     finally:
         pe.close()
 
@@ -273,7 +279,7 @@ class WindowsDingKeyProvider:
         self._bytes = self._hits = self._requests = 0
         self._created = None
         try:
-            self._getter, self._material = _load_binary(self.target['dll'])
+            self._getter, self._material, self.profile, self.layout = _load_binary(self.target['dll'])
             self._process = _open_process(self.pid, self.target['exe'])
             self._created = self._process.created_filetime
             expected = self.target.get('process_created_filetime')
@@ -308,10 +314,10 @@ class WindowsDingKeyProvider:
     def _validate_live(self):
         if self._process.pid != self.pid or self._process.created_filetime != self._created:
             raise ValueError('Process identity mismatch')
-        if _exact(self._read, self.base + GETTER_RVA, len(self._getter)) != self._getter:
+        if _exact(self._read, self.base + self.layout.getter_rva, len(self._getter)) != self._getter:
             raise ValueError('Live getter mismatch')
-        service = validate_pointer(_u64(self._read, self.base + ORG_SLOT_RVA))
-        if _u64(self._read, service) != self.base + ORG_VTABLE_RVA:
+        service = validate_pointer(_u64(self._read, self.base + self.layout.org_slot_rva))
+        if _u64(self._read, service) != self.base + self.layout.org_vtable_rva:
             raise ValueError('Organization service vtable mismatch')
 
     def get_key(self, org_id, version, crypto_type):
@@ -333,7 +339,7 @@ class WindowsDingKeyProvider:
     def resolve_enterprise(self, org_id):
         _integer(org_id, 'org_id', 1, 0x7fffffffffffffff)
         self._prepare()
-        operation = lambda read: resolve_enterprise(read, self.base, org_id)
+        operation = lambda read: resolve_enterprise(read, self.base, org_id, self.layout)
         first = _snapshot(self._read, operation)
         if first != _snapshot(self._read, operation):
             raise ValueError('Organization mapping changed during read')
@@ -350,7 +356,7 @@ class WindowsDingKeyProvider:
         if cache_id in self._cache:
             self._hits += 1
             return self._cache[cache_id]
-        operation = lambda read: select_wrapped_key(read, self.base, enterprise, version)
+        operation = lambda read: select_wrapped_key(read, self.base, enterprise, version, self.layout)
         first = _snapshot(self._read, operation)
         if first != _snapshot(self._read, operation):
             raise ValueError('Target key snapshot changed during read')
@@ -363,13 +369,14 @@ class WindowsDingKeyProvider:
 
     @property
     def dll_sha256(self):
-        return EXPECTED_SHA
+        return self.profile.dll_sha256
 
     @property
     def metadata(self):
         """Safe operational metadata; no keys, wrappers, or key fingerprints."""
         return {'pid': self.pid, 'process_created_filetime': self._created,
-                'dll_sha256': EXPECTED_SHA, 'bytes_read': self._bytes,
+                'dll_sha256': self.profile.dll_sha256, 'bytes_read': self._bytes,
+                'client_profile': self.profile.id, 'adapter_validation': self.profile.validation,
                 'requests': self._requests, 'cache_hits': self._hits,
                 'cached_key_count': len(self._cache), 'closed': self._closed,
                 'keys_written_to_disk': False, 'target_functions_called': False}

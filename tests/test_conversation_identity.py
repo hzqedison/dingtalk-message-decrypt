@@ -10,14 +10,17 @@ PATH = Path(__file__).resolve().parents[1] / 'scripts/client_runtime/conversatio
 SPEC = importlib.util.spec_from_file_location('conversation_identity_under_test', PATH)
 runtime = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime)
+from client_compatibility import LEGACY_PROFILE, CLIENT_261018001
+from client_layouts import LEGACY_LAYOUT, LAYOUT_261018001
 
 
 class Memory:
     base = 0x180000000
-    def __init__(self):
+    def __init__(self, layout=LEGACY_LAYOUT):
+        self.layout = layout
         self.data, self.calls, self.regions = {}, [], []
         self.heap = 0x700000
-        self.put(self.base+runtime.VTABLE_RVA, struct.pack('<Q', self.base+0xF84400))
+        self.put(self.base+layout.conversation_vtable_rva, struct.pack('<Q', self.base+layout.conversation_first_rva))
 
     def put(self, address, data):
         self.data.update({address+i: value for i, value in enumerate(data)})
@@ -41,7 +44,7 @@ class Memory:
     def object(self, address=0x200000, cid='cid/target', native='123:456', org='92', preferred=0,
                values=None):
         self.put(address, bytes(0x3B8))
-        self.put(address, struct.pack('<Q', self.base+runtime.VTABLE_RVA))
+        self.put(address, struct.pack('<Q', self.base+self.layout.conversation_vtable_rva))
         self.put(address+0x70, self.string(native))
         self.put(address+0x3B0, struct.pack('<q', preferred))
         values = {'id': org, 'openConversationId': cid, 'org_id': org} if values is None else values
@@ -133,12 +136,16 @@ class SelectionTests(unittest.TestCase):
 
 
 class ProviderTests(unittest.TestCase):
+    profile, layout = LEGACY_PROFILE, LEGACY_LAYOUT
+
     def setUp(self):
-        self.memory = Memory()
+        self.memory = Memory(self.layout)
         self.process = Process(self.memory)
         self.target = {'pid':7, 'exe':'synthetic/DingTalk.exe', 'dll':'synthetic/MainFrame.dll',
                        'module_base':self.memory.base, 'process_created_filetime':123}
-        self.patches = [patch.object(runtime, '_load_verified_vtable', return_value=struct.pack('<Q', self.memory.base+0xF84400)),
+        self.patches = [patch.object(runtime, '_load_verified_vtable',
+                                    return_value=(struct.pack('<Q', self.memory.base+self.layout.conversation_first_rva),
+                                                  self.profile, self.layout)),
                         patch.object(runtime, '_open_process', return_value=self.process),
                         patch.object(runtime, '_checked_regions', side_effect=lambda p: iter(self.memory.regions))]
         self.mocks = [p.start() for p in self.patches]
@@ -152,6 +159,8 @@ class ProviderTests(unittest.TestCase):
         self.memory.object()
         self.memory.object(0x300000)
         reader = self.make()
+        self.assertEqual(reader.summary['client_profile'], self.profile.id)
+        self.assertEqual(reader.summary['dll_sha256'], self.profile.dll_sha256)
         result = reader.resolve('cid/target')
         self.assertTrue(reader.summary['scan_completed'])
         self.assertTrue(self.process.closed)
@@ -177,7 +186,7 @@ class ProviderTests(unittest.TestCase):
     def test_conflicting_native_or_org_rejects_entire_cid(self):
         for native, org in (('other', '92'), ('123:456', '93')):
             with self.subTest(native=native, org=org):
-                self.memory = Memory()
+                self.memory = Memory(self.layout)
                 self.process.memory = self.memory
                 self.memory.object()
                 self.memory.object(0x300000, native=native, org=org)
@@ -244,7 +253,7 @@ class ProviderTests(unittest.TestCase):
         self.assertIsNone(reader.resolve('cid/target'))
 
     def test_live_vtable_or_identity_mismatch_closes(self):
-        self.memory.put(self.memory.base+runtime.VTABLE_RVA, bytes(8))
+        self.memory.put(self.memory.base+self.layout.conversation_vtable_rva, bytes(8))
         with self.assertRaisesRegex(ValueError, 'Live Conversation'):
             self.make()
         self.assertTrue(self.process.closed)
@@ -272,6 +281,10 @@ class ProviderTests(unittest.TestCase):
         reader = self.make()
         self.assertEqual(reader.summary['unreadable_regions_excluded'], 1)
         self.assertTrue(reader.summary['scan_completed'])
+
+
+class NewClientProviderTests(ProviderTests):
+    profile, layout = CLIENT_261018001, LAYOUT_261018001
 
 
 if __name__ == '__main__':
