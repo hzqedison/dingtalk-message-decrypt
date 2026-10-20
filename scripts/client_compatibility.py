@@ -13,6 +13,7 @@ class ClientProfile:
     tested_version: str
     dll_sha256: str
     capabilities: tuple[str, ...]
+    validation: str = 'unverified'
 
 
 LEGACY_PROFILE = ClientProfile(
@@ -20,8 +21,16 @@ LEGACY_PROFILE = ClientProfile(
     '9.0.2.261015001',
     '23bf21eec6a50c69388089e7ddeb22b573439c36f4c9be4c396d719a3f375d77',
     ('ding_key_provider', 'conversation_identity', 'typed_messages'),
+    'runtime_sample_verified',
 )
-PROFILES = (LEGACY_PROFILE,)
+CLIENT_261018001 = ClientProfile(
+    'windows-x64-261018001',
+    '9.0.2.261018001',
+    'e535c42ef08e3e32caaab1b7a444420a00a590fe233eb56f4a74d79bca42e641',
+    ('ding_key_provider', 'conversation_identity', 'typed_messages'),
+    'static_verified_runtime_pending',
+)
+PROFILES = (LEGACY_PROFILE, CLIENT_261018001)
 
 
 class ClientCompatibilityError(ValueError):
@@ -42,10 +51,12 @@ def assess_fingerprint(dll_sha256):
         'dll_sha256': dll_sha256,
         'profile_id': profile.id if profile else None,
         'tested_client_version': profile.tested_version if profile else None,
+        'adapter_validation': profile.validation if profile else None,
         'capabilities': list(profile.capabilities) if profile else [],
         'supported_profiles': [
             {'id': p.id, 'tested_client_version': p.tested_version,
-             'dll_sha256': p.dll_sha256, 'capabilities': list(p.capabilities)}
+             'dll_sha256': p.dll_sha256, 'capabilities': list(p.capabilities),
+             'adapter_validation': p.validation}
             for p in PROFILES
         ],
         'validation_stage': 'disk_fingerprint',

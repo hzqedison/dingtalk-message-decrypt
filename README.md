@@ -36,7 +36,7 @@ python <skill>/scripts/dws_decrypt.py --conversation-id <真实CID> --days 7 --o
 ## 使用条件
 
 - Python 3.10+，已安装并登录的 `dws >= 1.0.63`。
-- 本地解密还需要 `pefile`、PyCryptodome，以及已登录、版本匹配的 Windows 钉钉；当前验证版本为 `9.0.2.261015001`。
+- 本地解密还需要 `pefile`、PyCryptodome，以及已登录、指纹匹配的 Windows 钉钉。`9.0.2.261015001` 已有运行样本验证；`9.0.2.261018001` 已加入独立布局并通过静态核验，目标设备的原消息验收尚待完成。
 - 服务端解密不可用时，脚本会尝试本地解密。缺少匹配密钥、身份信息或遇到未知客户端版本时，会保留未解决项，不能保证全部历史可读。
 
 完整参数、解密方式和验证边界见 [使用说明](references/automation.md)。
@@ -46,7 +46,8 @@ python <skill>/scripts/dws_decrypt.py --conversation-id <真实CID> --days 7 --o
 客户端升级后出现 `unsupported_client_fingerprint` 时，用
 `python <skill>/scripts/client_doctor.py --dll "<实际 MainFrame.dll 路径>"`
 生成离线指纹诊断。此时尚未进入密钥查找；不要添加新哈希来强行放行。
-三个客户端读取入口已共用兼容注册表，但当前仍只支持上述已验证版本。
+三个客户端读取入口共用兼容注册表，自动选择上述两版的独立布局；其他指纹继续拒绝。
+`adapter_validation=static_verified_runtime_pending` 表示候选适配，不能据此宣称消息已恢复。
 扩展方法与验收要求见 [客户端兼容性](references/client-compatibility.md)。
 
 ## 安装与更新

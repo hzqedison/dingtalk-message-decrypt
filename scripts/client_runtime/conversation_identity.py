@@ -16,7 +16,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 try:
-    from client_compatibility import require_binary
+    from client_layouts import LEGACY_LAYOUT, select_binary_layout
 finally:
     sys.path.pop(0)
 
@@ -24,12 +24,12 @@ finally:
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from capture_message_evidence import ReadOnlyProcess
-    from capture_typed_messages import EXPECTED_SHA, read_string
+    from capture_typed_messages import read_string
     from native_string_map import read_string_map
 finally:
     sys.path.pop(0)
 
-VTABLE_RVA = 0x6DF44C8
+VTABLE_RVA = LEGACY_LAYOUT.conversation_vtable_rva
 SELECTED = frozenset({'openConversationId', 'id', 'org_id', 'orgId'})
 SOURCE = 'native_conversation_candidate_consensus'
 LIMIT = 0x800000000000
@@ -79,7 +79,7 @@ def select_org_consensus(preferred, extension):
     return fallback
 
 
-def snapshot(address, read, module_base, target_cids):
+def snapshot(address, read, module_base, target_cids, layout=LEGACY_LAYOUT):
     """Same-object relevant fields with full read/address fingerprint; no process I/O."""
     _pointer(address)
     _pointer(module_base)
@@ -95,7 +95,7 @@ def snapshot(address, read, module_base, target_cids):
         fingerprint.update(raw)
         return raw
     try:
-        if struct.unpack('<Q', exact(address, 8))[0] != module_base + VTABLE_RVA:
+        if struct.unpack('<Q', exact(address, 8))[0] != module_base + layout.conversation_vtable_rva:
             raise CandidateRejected('vtable_mismatch')
         header = exact(address+0x150, 16)
         identity = read_string_map(header, exact, {'openConversationId'})
@@ -156,16 +156,16 @@ def aggregate_candidates(candidates, blocked_cids=()):
 def _load_verified_vtable(path, base):
     import pefile
     raw = Path(path).read_bytes()
-    require_binary(raw, 'conversation_identity')
+    profile, layout = select_binary_layout(raw, 'conversation_identity')
     pe = pefile.PE(data=raw, fast_load=True)
     try:
-        slot = pe.get_data(VTABLE_RVA, 8)
+        slot = pe.get_data(layout.conversation_vtable_rva, 8)
         if len(slot) != 8:
             raise ValueError('Incomplete Conversation vtable')
         function_rva = struct.unpack('<Q', slot)[0] - pe.OPTIONAL_HEADER.ImageBase
-        if function_rva != 0xF84400:
+        if function_rva != layout.conversation_first_rva:
             raise ValueError('Unexpected Conversation vtable layout')
-        return struct.pack('<Q', base + function_rva)
+        return struct.pack('<Q', base + function_rva), profile, layout
     finally:
         pe.close()
 
@@ -225,15 +225,16 @@ class ConversationIdentityProvider:
             raise ValueError('Invalid byte budget')
         if type(chunk_size) is not int or not 16 <= chunk_size <= 4*1024**2:
             raise ValueError('Invalid scan chunk size')
-        expected = _load_verified_vtable(target['dll'], self.base)
+        expected, profile, layout = _load_verified_vtable(target['dll'], self.base)
         self._resolved = {}
         self._process = None
         self._closed = False
         started = time.monotonic()
         deadline = started + seconds
         rejected, blocked, seen, candidates = Counter(), set(), set(), []
-        self.summary = {'pid': target['pid'], 'dll_sha256': EXPECTED_SHA,
-                        'vtable_rva': hex(VTABLE_RVA), 'bytes_read': 0,
+        self.summary = {'pid': target['pid'], 'dll_sha256': profile.dll_sha256,
+                        'client_profile': profile.id, 'adapter_validation': profile.validation,
+                        'vtable_rva': hex(layout.conversation_vtable_rva), 'bytes_read': 0,
                         'scan_completed': False, 'candidates': 0, 'regions_scanned': 0,
                         'regions_excluded': 0, 'unreadable_regions_excluded': 0,
                         'target_conversation_count': len(self.target_cids),
@@ -257,9 +258,9 @@ class ConversationIdentityProvider:
             expected_created = target.get('process_created_filetime')
             if self._process.pid != target['pid'] or (expected_created is not None and expected_created != self._process.created_filetime):
                 raise ValueError('Process identity mismatch')
-            if read(self.base+VTABLE_RVA, 8) != expected:
+            if read(self.base+layout.conversation_vtable_rva, 8) != expected:
                 raise ValueError('Live Conversation vtable mismatch')
-            needle = struct.pack('<Q', self.base + VTABLE_RVA)
+            needle = struct.pack('<Q', self.base + layout.conversation_vtable_rva)
             for base, size, state, protect, kind in _checked_regions(self._process):
                 if time.monotonic() >= deadline:
                     raise ScanIncomplete('time_or_byte_budget')
@@ -289,8 +290,8 @@ class ConversationIdentityProvider:
                             self.summary['candidates'] += 1
                             first = None
                             try:
-                                first = snapshot(address, read, self.base, self.target_cids)
-                                second = snapshot(address, read, self.base, self.target_cids)
+                                first = snapshot(address, read, self.base, self.target_cids, layout)
+                                second = snapshot(address, read, self.base, self.target_cids, layout)
                                 if first != second:
                                     blocked.add(second['api_conversation_id'])
                                     raise CandidateRejected('changed_on_reread', first['api_conversation_id'])
@@ -305,7 +306,7 @@ class ConversationIdentityProvider:
                     if offset+count >= size:
                         break
                     offset += count-7
-            if read(self.base+VTABLE_RVA, 8) != expected:
+            if read(self.base+layout.conversation_vtable_rva, 8) != expected:
                 raise ScanIncomplete('live_vtable_changed')
             if not incomplete and time.monotonic() < deadline:
                 self.summary['scan_completed'] = True
@@ -321,7 +322,8 @@ class ConversationIdentityProvider:
         if self.summary['scan_completed']:
             self._resolved = accepted
             for result in self._resolved.values():
-                result['evidence'].update(scan_completed=True, dll_sha256=EXPECTED_SHA,
+                result['evidence'].update(scan_completed=True, dll_sha256=profile.dll_sha256,
+                                          client_profile=profile.id,
                                           process_created_filetime=self.summary['process_created_filetime'])
         self.summary.update(elapsed_seconds=time.monotonic()-started, rejected=dict(rejected),
                             stable_candidates=len(candidates), conflicts=conflicts,

@@ -23,11 +23,12 @@ finally:
     sys.path.pop(0)
 
 import client_compatibility
+from client_layouts import LEGACY_LAYOUT, LAYOUT_261018001
 
 
-def fixture_profile(raw):
+def fixture_profile(raw, profile_id=client_compatibility.LEGACY_PROFILE.id):
     return client_compatibility.ClientProfile(
-        client_compatibility.LEGACY_PROFILE.id, 'synthetic',
+        profile_id, 'synthetic',
         hashlib.sha256(raw).hexdigest(), ('typed_messages',))
 
 
@@ -38,16 +39,17 @@ class Memory:
     body = 0x40000
     head = 0x50000
 
-    def __init__(self, external='cid-target', extra=None):
+    def __init__(self, external='cid-target', extra=None, client_layout=LEGACY_LAYOUT):
+        self.client_layout = client_layout
         self.blocks, self.calls = {}, []
         self.next_heap = 0x90000
         model, content = bytearray(0x180), bytearray(0x48)
-        struct.pack_into('<QQ', model, 0, self.base + 0x81aff00, self.content)
+        struct.pack_into('<QQ', model, 0, self.base + client_layout.im_model_vtable, self.content)
         model[0x38:0x58] = self.string('123')
         struct.pack_into('<q', model, 0x58, 123456789)
         struct.pack_into('<q', model, 0xa0, 1790000000000)
         struct.pack_into('<i', model, 0xb8, 1)
-        struct.pack_into('<Qi', content, 0, self.base + 0x81afd98, 1)
+        struct.pack_into('<Qi', content, 0, self.base + client_layout.im_text_vtable, 1)
         body = '合成测试正文，不属于任何真实会话。'.encode()
         self.blocks[self.body] = bytearray(body+b'\0')
         content[0x28:0x48] = struct.pack('<QQQQ', self.body, 0, len(body), 127)
@@ -98,7 +100,8 @@ class Memory:
         return any(address in (self.content, self.body) for address,_ in self.calls)
 
     def snapshot(self, stable=True, **overrides):
-        options = dict(profile='im_chat', read_extensions=True, external_cids={'cid-target'})
+        options = dict(profile='im_chat', read_extensions=True, external_cids={'cid-target'},
+                       client_layout=self.client_layout)
         options.update(overrides)
         method = runtime.stable_snapshot if stable else runtime.snapshot
         return method(self.model, self.read, self.base, None, **options)
@@ -172,10 +175,12 @@ class ExternalConversationTests(unittest.TestCase):
 
 
 class SyntheticRunTests(unittest.TestCase):
+    client_profile, client_layout = client_compatibility.LEGACY_PROFILE, LEGACY_LAYOUT
+
     def run_fake(self, rows):
-        mem = Memory()
+        mem = Memory(client_layout=self.client_layout)
         scan_base = 0x100000
-        scan = b''.join(struct.pack('<Q', mem.base+0x81aff00) for _ in rows)
+        scan = b''.join(struct.pack('<Q', mem.base+self.client_layout.im_model_vtable) for _ in rows)
         disk_base = 0x180000000
         method_rva = 0x1000
         class FakePE:
@@ -203,12 +208,14 @@ class SyntheticRunTests(unittest.TestCase):
             args = SimpleNamespace(profile='im_chat',dll=str(dll),api='unused-fixture',anchors=[],
                                    out=str(root/'out'),pid=0,exe='fixture',seconds=1,max_gib=.001,module_base=mem.base)
             with patch.object(runtime,'EXPECTED_SHA',runtime.digest(dll.read_bytes())), \
-                 patch.object(client_compatibility, 'PROFILES', (fixture_profile(dll.read_bytes()),)), \
+                 patch.object(client_compatibility, 'PROFILES', (fixture_profile(dll.read_bytes(), self.client_profile.id),)), \
                  patch.object(runtime.pefile,'PE',return_value=FakePE()), \
                  patch.object(runtime,'ReadOnlyProcess',FakeProcess), \
                  patch.object(runtime,'ObjectProbe',return_value=matcher), \
                  patch.object(runtime,'stable_snapshot',side_effect=rows):
                 report = runtime.run(args)
+            self.assertEqual(report['client_profile'], self.client_profile.id)
+            self.assertEqual(report['dll_sha256'], hashlib.sha256(dll.read_bytes()).hexdigest())
             exported = (root/'out'/'readable_messages.jsonl').read_text(encoding='utf-8')
         return report,exported
 
@@ -277,6 +284,20 @@ class BridgeRecallTests(unittest.TestCase):
             supplemental = Path(result['supplemental_messages']).read_text(encoding='utf-8')
             self.assertNotIn('m-recalled',index+supplemental)
             self.assertFalse(json.loads(index)['crypto_decryption_proven'])
+
+
+class NewClientSyntheticRunTests(SyntheticRunTests):
+    client_profile, client_layout = client_compatibility.CLIENT_261018001, LAYOUT_261018001
+
+    def test_new_snapshot_reads_and_old_layout_rejects_before_body(self):
+        mem = Memory(client_layout=self.client_layout)
+        result = mem.snapshot()
+        self.assertEqual(result['native_message_id'], '123456789')
+        self.assertEqual(result['extension_selected']['openConversationId'], 'cid-target')
+        mem.calls.clear()
+        with self.assertRaisesRegex(runtime.Rejected, 'model_vtable_mismatch'):
+            mem.snapshot(client_layout=LEGACY_LAYOUT)
+        self.assertFalse(mem.body_was_read())
 
 
 if __name__ == '__main__':

@@ -9,7 +9,8 @@ import sys
 import uuid
 
 from message_pipeline import body_of, cipher_of, load_inputs, plaintext, sha
-from client_compatibility import ClientCompatibilityError, require_binary
+from client_compatibility import ClientCompatibilityError
+from client_layouts import select_binary_layout
 
 
 def discover_client():
@@ -36,7 +37,7 @@ def capture_loaded(input_paths, out_dir):
         return {'status':'unavailable','reason':error,'index':None}
     # Reject an unknown adapter before even the optional resident JSON scan.
     try:
-        require_binary(Path(target['dll']).read_bytes(), 'typed_messages')
+        select_binary_layout(Path(target['dll']).read_bytes(), 'typed_messages')
     except ClientCompatibilityError as error:
         return {'status':'unavailable','reason':error.reason,'index':None,
                 'client_compatibility':error.diagnostic}

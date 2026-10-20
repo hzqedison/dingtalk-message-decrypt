@@ -14,6 +14,7 @@ import client_compatibility as compatibility
 from client_doctor import inspect_dll
 from native_decryptor import NativeDecryptor
 from client_runtime import ding_key_provider, conversation_identity
+from client_layouts import select_binary_layout, LEGACY_LAYOUT, LAYOUT_261018001
 
 
 class CompatibilityTests(unittest.TestCase):
@@ -56,6 +57,33 @@ class CompatibilityTests(unittest.TestCase):
             result = compatibility.assess_fingerprint(profile.dll_sha256)
         self.assertEqual(result['reason'], 'ambiguous_client_profile')
         self.assertEqual(result['capabilities'], [])
+
+    def test_layout_dispatch_and_validation_stage_are_profile_specific(self):
+        raw_old, raw_new = b'synthetic old file', b'synthetic new file'
+        old = compatibility.ClientProfile(compatibility.LEGACY_PROFILE.id, 'old',
+            hashlib.sha256(raw_old).hexdigest(), ('ding_key_provider',), 'runtime_sample_verified')
+        new = compatibility.ClientProfile(compatibility.CLIENT_261018001.id, 'new',
+            hashlib.sha256(raw_new).hexdigest(), ('ding_key_provider',), 'static_verified_runtime_pending')
+        with patch.object(compatibility, 'PROFILES', (old, new)):
+            for raw, profile, layout in ((raw_new, new, LAYOUT_261018001),
+                                          (raw_old, old, LEGACY_LAYOUT),
+                                          (raw_new, new, LAYOUT_261018001)):
+                selected, actual = select_binary_layout(raw, 'ding_key_provider')
+                self.assertIs(selected, profile)
+                self.assertIs(actual, layout)
+                info = compatibility.assess_fingerprint(profile.dll_sha256)
+                self.assertEqual(info['adapter_validation'], profile.validation)
+                self.assertFalse(info['runtime_validation_performed'])
+            self.assertNotEqual(LEGACY_LAYOUT.key_slot_rva, LAYOUT_261018001.key_slot_rva)
+
+    def test_registered_fingerprint_without_implemented_layout_still_rejected(self):
+        raw = b'future layout'
+        profile = compatibility.ClientProfile('future-adapter', 'future',
+            hashlib.sha256(raw).hexdigest(), ('ding_key_provider',))
+        with patch.object(compatibility, 'PROFILES', (profile,)):
+            with self.assertRaises(compatibility.ClientCompatibilityError) as caught:
+                select_binary_layout(raw, 'ding_key_provider')
+        self.assertEqual(caught.exception.reason, 'client_adapter_not_implemented')
 
     def test_offline_doctor_unknown_and_missing_files_do_not_leak_path(self):
         with tempfile.TemporaryDirectory() as directory:
