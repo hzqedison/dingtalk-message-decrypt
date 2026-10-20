@@ -43,6 +43,12 @@ python <skill>/scripts/dws_decrypt.py --conversation-id <真实CID> --days 7 --o
 
 另一台电脑运行失败时，先看 `summary.json` 的 `local_crypto.dependencies`。缺少 `Crypto` 应在运行脚本的同一 Python 环境安装 `pycryptodome`；报告中的 `install_command` 给出了对应解释器。不要仅凭 `cached_key_count=0` 判断客户端缺密钥。具体步骤见 [跨设备排查](references/automation.md#跨设备排查)。
 
+客户端升级后出现 `unsupported_client_fingerprint` 时，用
+`python <skill>/scripts/client_doctor.py --dll "<实际 MainFrame.dll 路径>"`
+生成离线指纹诊断。此时尚未进入密钥查找；不要添加新哈希来强行放行。
+三个客户端读取入口已共用兼容注册表，但当前仍只支持上述已验证版本。
+扩展方法与验收要求见 [客户端兼容性](references/client-compatibility.md)。
+
 ## 安装与更新
 
 将本仓库放在本机，首次安装前检查 `install.sh`，保存已有的同名技能目录，再从仓库目录运行：

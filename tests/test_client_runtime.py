@@ -22,6 +22,14 @@ try:
 finally:
     sys.path.pop(0)
 
+import client_compatibility
+
+
+def fixture_profile(raw):
+    return client_compatibility.ClientProfile(
+        client_compatibility.LEGACY_PROFILE.id, 'synthetic',
+        hashlib.sha256(raw).hexdigest(), ('typed_messages',))
+
 
 class Memory:
     base = 0x180000000
@@ -195,6 +203,7 @@ class SyntheticRunTests(unittest.TestCase):
             args = SimpleNamespace(profile='im_chat',dll=str(dll),api='unused-fixture',anchors=[],
                                    out=str(root/'out'),pid=0,exe='fixture',seconds=1,max_gib=.001,module_base=mem.base)
             with patch.object(runtime,'EXPECTED_SHA',runtime.digest(dll.read_bytes())), \
+                 patch.object(client_compatibility, 'PROFILES', (fixture_profile(dll.read_bytes()),)), \
                  patch.object(runtime.pefile,'PE',return_value=FakePE()), \
                  patch.object(runtime,'ReadOnlyProcess',FakeProcess), \
                  patch.object(runtime,'ObjectProbe',return_value=matcher), \
@@ -254,8 +263,11 @@ class BridgeRecallTests(unittest.TestCase):
                     (output/'readable_messages.jsonl').write_text(
                         ''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in captured),encoding='utf-8')
                 return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
-            target = {'pid':0,'exe':'fixture','dll':'fixture','module_base':Memory.base}
+            dll = root/'fixture.dll'
+            dll.write_bytes(b'fixture-not-a-real-dll')
+            target = {'pid':0,'exe':'fixture','dll':str(dll),'module_base':Memory.base}
             with patch.object(bridge,'discover_client',return_value=(target,None)), \
+                 patch.object(client_compatibility, 'PROFILES', (fixture_profile(dll.read_bytes()),)), \
                  patch.object(bridge.subprocess,'run',side_effect=fake_subprocess):
                 result = bridge.capture_loaded([source],root/'out')
             self.assertEqual(result['excluded']['recall_marked'],1)

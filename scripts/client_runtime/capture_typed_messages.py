@@ -12,6 +12,7 @@ from datetime import datetime, timezone, timedelta
 import json
 from pathlib import Path
 import struct
+import sys
 import time
 
 import pefile
@@ -20,7 +21,13 @@ from message_evidence import canonical_cipher, digest, plaintext_ok
 from probe_message_objects import ObjectProbe
 from native_string_map import read_string_map, NativeMapRejected
 
-EXPECTED_SHA = '23bf21eec6a50c69388089e7ddeb22b573439c36f4c9be4c396d719a3f375d77'
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    from client_compatibility import LEGACY_PROFILE, require_binary
+finally:
+    sys.path.pop(0)
+
+EXPECTED_SHA = LEGACY_PROFILE.dll_sha256
 MODEL_VTABLE = 0x6e03df0
 TEXT_VTABLE = 0x6e36328
 PROFILES = {
@@ -139,8 +146,7 @@ def run(args):
     layout = PROFILES[args.profile]
     dll = Path(args.dll)
     binary = dll.read_bytes()
-    if digest(binary) != EXPECTED_SHA:
-        raise ValueError('Unsupported DLL version/hash')
+    require_binary(binary, 'typed_messages')
     matcher = ObjectProbe(args.api, args.anchors)
     if not matcher.target_cids or (args.profile != 'im_chat' and not matcher.internal_cids):
         raise ValueError('No validated target conversation scope')

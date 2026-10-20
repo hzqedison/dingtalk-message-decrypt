@@ -14,6 +14,12 @@ import struct
 import sys
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    from client_compatibility import require_binary
+finally:
+    sys.path.pop(0)
+
 # Existing runtime scripts use sibling imports. Restore the caller's path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
@@ -150,8 +156,7 @@ def aggregate_candidates(candidates, blocked_cids=()):
 def _load_verified_vtable(path, base):
     import pefile
     raw = Path(path).read_bytes()
-    if hashlib.sha256(raw).hexdigest() != EXPECTED_SHA:
-        raise ValueError('Unsupported MainFrame.dll hash')
+    require_binary(raw, 'conversation_identity')
     pe = pefile.PE(data=raw, fast_load=True)
     try:
         slot = pe.get_data(VTABLE_RVA, 8)

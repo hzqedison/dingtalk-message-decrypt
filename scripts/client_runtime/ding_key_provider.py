@@ -12,7 +12,13 @@ import struct
 import sys
 import time
 
-EXPECTED_SHA = '23bf21eec6a50c69388089e7ddeb22b573439c36f4c9be4c396d719a3f375d77'
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    from client_compatibility import LEGACY_PROFILE, require_binary
+finally:
+    sys.path.pop(0)
+
+EXPECTED_SHA = LEGACY_PROFILE.dll_sha256
 GETTER_RVA, KEY_SLOT_RVA = 0x59AAF40, 0x9D70CD8
 ORG_SLOT_RVA, ORG_VTABLE_RVA = 0x9D5F148, 0x82C0E30
 MATERIAL_TABLE_RVA = 0x84EF581
@@ -213,8 +219,7 @@ def _snapshot(read, operation):
 def _load_binary(path):
     import pefile
     raw = Path(path).read_bytes()
-    if hashlib.sha256(raw).hexdigest() != EXPECTED_SHA:
-        raise ValueError('Unsupported MainFrame.dll hash')
+    require_binary(raw, 'ding_key_provider')
     pe = pefile.PE(data=raw, fast_load=True)
     try:
         getter = pe.get_data(GETTER_RVA, 57)

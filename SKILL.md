@@ -35,6 +35,11 @@ python <skill>/scripts/dws_decrypt.py --conversation-id <cid> --start "2026-10-0
 
 跨设备失败先检查 `local_crypto.dependencies` 和 `python_executable`：`local_dependency_unavailable` 表示依赖不可用，按报告的 `install_command` 在同一解释器环境修复后重跑。`Crypto` 对应 `pycryptodome`；`cached_key_count=0` 不能证明客户端缺密钥。详细字段和来源核验见 [跨设备排查](references/automation.md#跨设备排查)。
 
+客户端升级后若 `local_crypto.stop_reason=unsupported_client_fingerprint`，检查
+`local_crypto.client_compatibility`；这是磁盘指纹校验失败，尚未进入密钥查找。
+可运行 `python <skill>/scripts/client_doctor.py --dll "<实际 MainFrame.dll 路径>"` 生成无正文、无密钥的离线诊断。
+已知指纹也不代表业务恢复；新版本接入与验收见 [客户端兼容性](references/client-compatibility.md)。
+
 ## 必须保留的判断
 
 - 单聊和群聊正文都可能加密。高层 `+chat-messages` / `+at-me` 可能只给占位符；需要底层 `chat message list` 的 `content`。脚本负责分页，不传 `--max-items`，不要再绕回 `list-all` / `+search-msg` 来恢复密文。
