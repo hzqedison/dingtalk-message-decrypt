@@ -152,11 +152,19 @@ def valid_local_result(result, identity):
             and ('corpId' not in identity or identity['corpId'] == result['enterprise']))
 
 
+class ResolvedOutputInputError(ValueError):
+    """A resolution artifact was supplied where a raw snapshot is required."""
+
+
 def messages_of(payload):
     if isinstance(payload, list):
         for item in payload:
             yield from messages_of(item)
     elif isinstance(payload, dict):
+        if 'original' in payload and 'resolution' in payload:
+            raise ResolvedOutputInputError(
+                'Resolved output records are not raw input; use a raw snapshot '
+                'or explicitly extract each original record.')
         if payload.get('messageId') or payload.get('openMessageId'):
             yield payload
             return

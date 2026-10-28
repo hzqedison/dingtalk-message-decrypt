@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 import sqlite3
 
-from message_pipeline import Cache, load_inputs, resolve_batch, run_cli
+from message_pipeline import Cache, load_inputs, resolve_batch, run_cli, ResolvedOutputInputError
 from dws_fetch import fetch_snapshot
 
 
@@ -162,6 +162,11 @@ def main(argv=None):
     args = parser().parse_args(argv)
     try:
         report = execute(args)
+    except ResolvedOutputInputError:
+        print(json.dumps({'status': 'error', 'error_type': 'ResolvedOutputInputError',
+                          'reason': 'resolved_output_not_raw_input',
+                          'hint': 'Use a raw snapshot, or explicitly extract original records from resolved.jsonl into a separate input file.'}))
+        return 1
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
         print(json.dumps({'status': 'error', 'error_type': type(error).__name__,
                           'hint': 'Check paths, scope, argument combinations and whether the output is already in use.'}))
