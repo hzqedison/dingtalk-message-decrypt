@@ -14,7 +14,7 @@ import client_compatibility as compatibility
 from client_doctor import inspect_dll
 from native_decryptor import NativeDecryptor
 from client_runtime import ding_key_provider, conversation_identity
-from client_layouts import select_binary_layout, LEGACY_LAYOUT, LAYOUT_261018001
+from client_layouts import select_binary_layout, LEGACY_LAYOUT, LAYOUT_261018001, LAYOUT_261021001
 
 
 class CompatibilityTests(unittest.TestCase):
@@ -84,6 +84,24 @@ class CompatibilityTests(unittest.TestCase):
             with self.assertRaises(compatibility.ClientCompatibilityError) as caught:
                 select_binary_layout(raw, 'ding_key_provider')
         self.assertEqual(caught.exception.reason, 'client_adapter_not_implemented')
+
+    def test_all_three_profiles_dispatch_without_mutating_prior_layouts(self):
+        from dataclasses import replace, asdict
+        layouts = (LEGACY_LAYOUT, LAYOUT_261018001, LAYOUT_261021001)
+        saved = [asdict(layout) for layout in layouts]
+        raws = [b'layout-fixture-' + bytes([i]) for i in range(3)]
+        profiles = tuple(replace(p, dll_sha256=hashlib.sha256(raw).hexdigest())
+                         for p, raw in zip(compatibility.PROFILES, raws))
+        self.assertEqual(len(profiles), 3)
+        with patch.object(compatibility, 'PROFILES', profiles):
+            for i in (2, 0, 1, 2):
+                for capability in profiles[i].capabilities:
+                    profile, layout = select_binary_layout(raws[i], capability)
+                    self.assertIs(profile, profiles[i])
+                    self.assertIs(layout, layouts[i])
+                self.assertFalse(compatibility.assess_fingerprint(
+                    profiles[i].dll_sha256)['runtime_validation_performed'])
+        self.assertEqual(saved, [asdict(layout) for layout in layouts])
 
     def test_offline_doctor_unknown_and_missing_files_do_not_leak_path(self):
         with tempfile.TemporaryDirectory() as directory:

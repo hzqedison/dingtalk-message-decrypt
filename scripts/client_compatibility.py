@@ -30,7 +30,14 @@ CLIENT_261018001 = ClientProfile(
     ('ding_key_provider', 'conversation_identity', 'typed_messages'),
     'runtime_batch_reported',
 )
-PROFILES = (LEGACY_PROFILE, CLIENT_261018001)
+CLIENT_261021001 = ClientProfile(
+    'windows-x64-261021001',
+    '9.0.4.261021001',
+    '8aa52c083e22e4847293ad91d857b486786277fb259c646f10802e04b91e3cee',
+    ('ding_key_provider', 'conversation_identity', 'typed_messages'),
+    'runtime_sample_verified',
+)
+PROFILES = (LEGACY_PROFILE, CLIENT_261018001, CLIENT_261021001)
 
 
 class ClientCompatibilityError(ValueError):

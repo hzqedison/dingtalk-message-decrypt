@@ -23,7 +23,7 @@ finally:
     sys.path.pop(0)
 
 import client_compatibility
-from client_layouts import LEGACY_LAYOUT, LAYOUT_261018001
+from client_layouts import LEGACY_LAYOUT, LAYOUT_261018001, LAYOUT_261021001
 
 
 def fixture_profile(raw, profile_id=client_compatibility.LEGACY_PROFILE.id):
@@ -297,6 +297,16 @@ class NewClientSyntheticRunTests(SyntheticRunTests):
         mem.calls.clear()
         with self.assertRaisesRegex(runtime.Rejected, 'model_vtable_mismatch'):
             mem.snapshot(client_layout=LEGACY_LAYOUT)
+        self.assertFalse(mem.body_was_read())
+
+
+class Client261021SyntheticRunTests(NewClientSyntheticRunTests):
+    client_profile, client_layout = client_compatibility.CLIENT_261021001, LAYOUT_261021001
+
+    def test_previous_layout_rejects_before_body(self):
+        mem = Memory(client_layout=self.client_layout)
+        with self.assertRaisesRegex(runtime.Rejected, 'model_vtable_mismatch'):
+            mem.snapshot(client_layout=LAYOUT_261018001)
         self.assertFalse(mem.body_was_read())
 
 

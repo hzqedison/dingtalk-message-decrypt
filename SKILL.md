@@ -39,7 +39,9 @@ python <skill>/scripts/dws_decrypt.py --conversation-id <cid> --start "2026-10-0
 `local_crypto.client_compatibility`；这是磁盘指纹校验失败，尚未进入密钥查找。
 可运行 `python <skill>/scripts/client_doctor.py --dll "<实际 MainFrame.dll 路径>"` 生成无正文、无密钥的离线诊断。
 已知指纹也不代表业务恢复；新版本接入与验收见 [客户端兼容性](references/client-compatibility.md)。
-`261015001` 与 `261018001` 使用各自的布局，按 DLL 指纹自动选择，无需修改日报或支持项目。
+`261015001`、`261018001`、`261021001` 使用各自的布局，按 DLL 指纹自动选择，无需修改日报或支持项目。
+`9.0.4.261021001` 已在维护端完成静态核验、真实进程初始化及一条保存正文的修复前后对照；
+不代表 DELL 原失败样本、引用或整批恢复已通过。见 [261021001 核验记录](references/client-261021001-validation.md)。
 `261018001` 当前标记 `adapter_validation=runtime_batch_reported`：
 已收到 DELL 限定原始批次恢复通过的回执，证据文件尚未同步到维护端复核。
 每个新批次仍须按实际结果验收，分别报告正文、引用父 ID、原始空字段、附件和策略限制，
@@ -56,6 +58,9 @@ python <skill>/scripts/dws_decrypt.py --conversation-id <cid> --start "2026-10-0
 - 可读数、服务端解密数、客户端补充数、分页完整性分别报告。旧“100% 解密”结论混入过中间信封，不能沿用。
 
 参数语义、恢复/缓存隔离、输出字段与当前验证边界见 [automation.md](references/automation.md)。
+
+`resolved.jsonl` 是输出包装记录，不能直接作为原始 `--input`；误传时返回
+`resolved_output_not_raw_input`，不生成零行完成摘要。应使用原始快照，或在独立输入文件中显式提取每条 `original`。
 
 ## 维护
 

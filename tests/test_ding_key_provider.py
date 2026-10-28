@@ -10,8 +10,8 @@ PATH = Path(__file__).resolve().parents[1] / 'scripts/client_runtime/ding_key_pr
 SPEC = importlib.util.spec_from_file_location('key_provider_under_test', PATH)
 provider = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(provider)
-from client_compatibility import LEGACY_PROFILE, CLIENT_261018001
-from client_layouts import LEGACY_LAYOUT, LAYOUT_261018001
+from client_compatibility import LEGACY_PROFILE, CLIENT_261018001, CLIENT_261021001
+from client_layouts import LEGACY_LAYOUT, LAYOUT_261018001, LAYOUT_261021001
 
 
 class Memory:
@@ -324,6 +324,10 @@ class ProviderTests(unittest.TestCase):
 
 class NewClientProviderTests(ProviderTests):
     profile, layout = CLIENT_261018001, LAYOUT_261018001
+
+
+class Client261021ProviderTests(ProviderTests):
+    profile, layout = CLIENT_261021001, LAYOUT_261021001
 
 
 if __name__ == '__main__':
