@@ -64,6 +64,12 @@ python <skill>/scripts/dws_decrypt.py --conversation-id <cid> --start "2026-10-0
 
 ## 维护
 
+调用方接入与解密适配统一在本仓库维护。出现模式日志不符、包装输出误作输入、
+小样失败仍续跑或零条输入被当作业务完成时，先读
+[调用层接入说明](references/caller-integration/README.md)，使用 `scripts/caller_checks.py`
+及同目录迁移示例；不要在各业务项目复制并独立维护校验逻辑。
+更新技能不会自动改写现有日报调用脚本，首次接入仍须移植并做合成测试。
+
 源码在独立技能 Git 仓库。改源码后运行仓库的 `sync_to_agents.sh`，同步到 `~/.agents/skills/dingtalk-message-decrypt`，其余宿主通过符号链接跟随。
 
 未来 agent 自动路由由调用方的 dws/chat 技能触发，可用 `scripts/install_routes.py --skill-file <聊天技能的SKILL.md>` 安装可逆路由。它只改指定文件中的标记块，先备份；上游重装覆盖该块后可重跑。不劫持 dws 命令或改其他能力路由。

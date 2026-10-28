@@ -1,5 +1,9 @@
 # 批处理行为与边界
 
+调用方的模式配置、原始输入提取和小样门禁统一由本仓库维护，见
+[调用层接入说明](caller-integration/README.md) 和 `scripts/caller_checks.py`。
+三个脱敏迁移示例及合成测试也在本仓库，无需依赖其他仓库的交接分支。
+
 ## 输入、输出、恢复
 
 入口 `scripts/dws_decrypt.py` 支持重复的 `--input`（原始 JSON/JSONL 或平面目录）；不传输入则用当前已认证 dws 账号读取。

@@ -53,6 +53,11 @@ python <skill>/scripts/dws_decrypt.py --conversation-id <真实CID> --days 7 --o
 
 ## 安装与更新
 
+**只维护这一个仓库的读取代码**：客户端适配、统一读取器、调用校验与接入示例一起更新。
+日报或其他 Agent 的调用脚本首次接入，请读 [调用层接入说明](references/caller-integration/README.md)。
+通用校验位于 `scripts/caller_checks.py`，随技能部署；各设备仅保留业务配置和少量调用代码。
+更新技能不会自动修改已有业务脚本，也不会运行排程、发布日报或发送通知。
+
 将本仓库放在本机，首次安装前检查 `install.sh`，保存已有的同名技能目录，再从仓库目录运行：
 
 ```bash
