@@ -10,8 +10,8 @@ PATH = Path(__file__).resolve().parents[1] / 'scripts/client_runtime/conversatio
 SPEC = importlib.util.spec_from_file_location('conversation_identity_under_test', PATH)
 runtime = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runtime)
-from client_compatibility import LEGACY_PROFILE, CLIENT_261018001, CLIENT_261021001
-from client_layouts import LEGACY_LAYOUT, LAYOUT_261018001, LAYOUT_261021001
+from client_compatibility import LEGACY_PROFILE, CLIENT_261018001, CLIENT_261021001, CLIENT_261029005
+from client_layouts import LEGACY_LAYOUT, LAYOUT_261018001, LAYOUT_261021001, LAYOUT_261029005
 
 
 class Memory:
@@ -289,6 +289,10 @@ class NewClientProviderTests(ProviderTests):
 
 class Client261021ProviderTests(ProviderTests):
     profile, layout = CLIENT_261021001, LAYOUT_261021001
+
+
+class Client261029ProviderTests(ProviderTests):
+    profile, layout = CLIENT_261029005, LAYOUT_261029005
 
 
 if __name__ == '__main__':

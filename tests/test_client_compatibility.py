@@ -14,7 +14,7 @@ import client_compatibility as compatibility
 from client_doctor import inspect_dll
 from native_decryptor import NativeDecryptor
 from client_runtime import ding_key_provider, conversation_identity
-from client_layouts import select_binary_layout, LEGACY_LAYOUT, LAYOUT_261018001, LAYOUT_261021001
+from client_layouts import select_binary_layout, LEGACY_LAYOUT, LAYOUT_261018001, LAYOUT_261021001, LAYOUT_261029005
 
 
 class CompatibilityTests(unittest.TestCase):
@@ -85,16 +85,16 @@ class CompatibilityTests(unittest.TestCase):
                 select_binary_layout(raw, 'ding_key_provider')
         self.assertEqual(caught.exception.reason, 'client_adapter_not_implemented')
 
-    def test_all_three_profiles_dispatch_without_mutating_prior_layouts(self):
+    def test_all_four_profiles_dispatch_without_mutating_prior_layouts(self):
         from dataclasses import replace, asdict
-        layouts = (LEGACY_LAYOUT, LAYOUT_261018001, LAYOUT_261021001)
+        layouts = (LEGACY_LAYOUT, LAYOUT_261018001, LAYOUT_261021001, LAYOUT_261029005)
         saved = [asdict(layout) for layout in layouts]
-        raws = [b'layout-fixture-' + bytes([i]) for i in range(3)]
+        raws = [b'layout-fixture-' + bytes([i]) for i in range(4)]
         profiles = tuple(replace(p, dll_sha256=hashlib.sha256(raw).hexdigest())
                          for p, raw in zip(compatibility.PROFILES, raws))
-        self.assertEqual(len(profiles), 3)
+        self.assertEqual(len(profiles), 4)
         with patch.object(compatibility, 'PROFILES', profiles):
-            for i in (2, 0, 1, 2):
+            for i in (3, 2, 0, 1, 3, 2):
                 for capability in profiles[i].capabilities:
                     profile, layout = select_binary_layout(raws[i], capability)
                     self.assertIs(profile, profiles[i])
@@ -102,6 +102,20 @@ class CompatibilityTests(unittest.TestCase):
                 self.assertFalse(compatibility.assess_fingerprint(
                     profiles[i].dll_sha256)['runtime_validation_performed'])
         self.assertEqual(saved, [asdict(layout) for layout in layouts])
+
+    def test_261029_unreviewed_typed_messages_remain_disabled(self):
+        raw = b'synthetic 261029 file'
+        from dataclasses import replace
+        profile = replace(compatibility.CLIENT_261029005,
+                          dll_sha256=hashlib.sha256(raw).hexdigest())
+        with patch.object(compatibility, 'PROFILES', (profile,)):
+            for capability in ('ding_key_provider', 'conversation_identity'):
+                selected, layout = select_binary_layout(raw, capability)
+                self.assertIs(selected, profile)
+                self.assertIs(layout, LAYOUT_261029005)
+            with self.assertRaises(compatibility.ClientCompatibilityError) as caught:
+                select_binary_layout(raw, 'typed_messages')
+        self.assertEqual(caught.exception.reason, 'client_capability_not_supported')
 
     def test_offline_doctor_unknown_and_missing_files_do_not_leak_path(self):
         with tempfile.TemporaryDirectory() as directory:
